@@ -1,6 +1,7 @@
 export interface CityInfo {
   name: string;
-  longitude: number; // degrees East
+  longitude: number; // degrees East (negative for West)
+  utcOffsetMinutes?: number; // standard timezone offset in minutes (default 480 = UTC+8)
 }
 
 export interface ProvinceInfo {
@@ -699,6 +700,37 @@ export const PROVINCES: ProvinceInfo[] = [
     ],
   },
 
-  // 注：海外出生暂未支持，因 share.ts 真太阳时算法假设输入为北京时间(UTC+8)。
-  // 海外用户请把当地时间换算成北京时间再填写（或填出生时所在的中国时区相对城市）。
+  // ─── 海外 / 国际（附带标准时区偏移 utcOffsetMinutes） ─────────────────────────
+  {
+    name: '海外 / 国际',
+    cities: [
+      { name: '莫斯科', longitude: 37.6, utcOffsetMinutes: 180 },
+      { name: '圣彼得堡', longitude: 30.3, utcOffsetMinutes: 180 },
+      { name: '叶卡捷琳堡', longitude: 60.6, utcOffsetMinutes: 300 },
+      { name: '新西伯利亚', longitude: 82.9, utcOffsetMinutes: 420 },
+      { name: '符拉迪沃斯托克', longitude: 131.9, utcOffsetMinutes: 600 },
+      { name: '阿拉木图', longitude: 76.9, utcOffsetMinutes: 300 },
+      { name: '明斯克', longitude: 27.6, utcOffsetMinutes: 180 },
+      { name: '东京', longitude: 139.7, utcOffsetMinutes: 540 },
+      { name: '首尔', longitude: 127.0, utcOffsetMinutes: 540 },
+      { name: '新加坡', longitude: 103.8, utcOffsetMinutes: 480 },
+      { name: '吉隆坡', longitude: 101.7, utcOffsetMinutes: 480 },
+      { name: '曼谷', longitude: 100.5, utcOffsetMinutes: 420 },
+      { name: '伦敦', longitude: -0.1, utcOffsetMinutes: 0 },
+      { name: '巴黎', longitude: 2.3, utcOffsetMinutes: 60 },
+      { name: '柏林', longitude: 13.4, utcOffsetMinutes: 60 },
+      { name: '纽约', longitude: -74.0, utcOffsetMinutes: -300 },
+      { name: '洛杉矶', longitude: -118.2, utcOffsetMinutes: -480 },
+      { name: '多伦多', longitude: -79.4, utcOffsetMinutes: -300 },
+      { name: '温哥华', longitude: -123.1, utcOffsetMinutes: -480 },
+      { name: '悉尼', longitude: 151.2, utcOffsetMinutes: 600 },
+      { name: '墨尔本', longitude: 145.0, utcOffsetMinutes: 600 },
+    ],
+  },
 ];
+
+export function findCityInfo(provinceName: string, cityName: string): CityInfo | undefined {
+  if (!provinceName || !cityName) return undefined;
+  const prov = PROVINCES.find((p) => p.name === provinceName);
+  return prov?.cities.find((c) => c.name === cityName);
+}

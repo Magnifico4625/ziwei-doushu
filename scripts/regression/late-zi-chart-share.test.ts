@@ -1,13 +1,10 @@
 /**
- * 晚子时：/chart 与分享链接必须排出同一张盘。
+ * 晚子时：/chart 与分享链接必须排出同一张盘，且真太阳时换日与 `true-solar-time.ts` 一致。
  *
- * 项目口径（README、school 默认 lateZishi = next-day、share.ts）：
- *   · 23:00–23:59 晚子时，按次日排盘，时辰支仍是子（0）
- *   · 00:00–00:59 早子时，按当日排盘，时辰支也是子（0）
+ * 项目口径（README、school 默认 lateZishi = next-day、share.ts、true-solar-time.ts）：
+ *   · 23:00–23:59 晚子时（真太阳时），按次日排盘，时辰支仍是子（0）
+ *   · 00:00–00:59 早子时（真太阳时），按当日排盘，时辰支也是子（0）
  *   · 「日期 +1」只作用于已经存在的公历日；2 月 30 日、平年 2 月 29 日先拒绝，再交给 iztro
- *
- * main 上 /chart 走 BirthForm.handleSubmit，把表单上的公历日原样交出去，23 点不换日。
- * 分享 / 合盘走 formToBirthInfo，23 点才 +1。同一份生辰因此两张盘。
  *
  * 跑: npx tsx scripts/regression/late-zi-chart-share.test.ts
  */
@@ -68,8 +65,7 @@ function blankForm(year: string, month: string, day: string, clockHour: string, 
 }
 
 /**
- * main 上 /chart 的提交结果（BirthForm.handleSubmit，9624865）。
- * 只用作对照基线：23 点不换日。时辰支与 formToBirthInfo 用同一个 calcTrueSolarBranch。
+ * 旧 /chart 的提交基线：不换日，时辰按真太阳时。
  */
 function mainChartBirthInfo(form: BirthFormState): BirthInfo {
   const year = parseInt(form.year, 10) || 0;
@@ -77,7 +73,12 @@ function mainChartBirthInfo(form: BirthFormState): BirthInfo {
   const day = parseInt(form.day, 10) || 0;
   const hour = form.unknownTime
     ? 0
-    : calcTrueSolarBranch(parseInt(form.clockHour, 10) || 0, parseInt(form.clockMinute, 10) || 0, form.longitude);
+    : calcTrueSolarBranch(parseInt(form.clockHour, 10) || 0, parseInt(form.clockMinute, 10) || 0, form.longitude, {
+        year,
+        month,
+        day,
+        utcOffsetMinutes: form.utcOffsetMinutes,
+      });
   return {
     year,
     month,
@@ -195,6 +196,7 @@ assertRejected('1900', '2', '29');
 assertRejected('2024', '2', '30');
 assertRejected('1990', '4', '31');
 
+// 乌鲁木齐 (87.6°E)：北京时间 23:30 对应当地真太阳时约 21:17（亥时），仍在当日，不应误进次日。
 const named = blankForm('1990', '12', '31', '23', '30');
 named.name = '晚子';
 named.gender = 'female';
@@ -203,10 +205,10 @@ named.city = '乌鲁木齐';
 named.longitude = 87.6;
 const namedInfo = chartBirthInfo(named);
 assert.deepEqual(ymdh(namedInfo), {
-  year: 1991,
-  month: 1,
-  day: 1,
-  hour: calcTrueSolarBranch(23, 30, 87.6),
+  year: 1990,
+  month: 12,
+  day: 31,
+  hour: calcTrueSolarBranch(23, 30, 87.6, { year: 1990, month: 12, day: 31 }),
 });
 assert.equal(namedInfo.name, '晚子');
 assert.equal(namedInfo.gender, 'female');
@@ -214,7 +216,8 @@ assert.equal(namedInfo.province, '新疆');
 assert.equal(namedInfo.city, '乌鲁木齐');
 assert.equal(namedInfo.longitude, 87.6);
 assert.deepEqual(namedInfo, formToBirthInfo(named));
-assert.notEqual(calcTrueSolarBranch(23, 30, 87.6), 0, 'Urumqi 23:30 is not zi hour, but the date still advances');
+assert.equal(calcTrueSolarBranch(23, 30, 87.6, { year: 1990, month: 12, day: 31 }), 11, 'Urumqi 23:30 Beijing time is hai hour on the same solar day');
+assert.equal(isLateZiNextDay(namedInfo), false, 'Urumqi 23:30 does not advance to the next day');
 
 const unknown = blankForm('1990', '1', '31', '23', '30');
 unknown.unknownTime = true;
@@ -309,7 +312,8 @@ function gridForms(hours: string[], minutes: string[], longitude = 120): BirthFo
 
 const nonLate = compareGrid(gridForms(['0', '8', '22'], ['30']));
 const late = compareGrid(gridForms(['23'], ['0', '59']));
-const longitudes = [87.6, 116.4, 121.5, 126.5];
+// 东八区标准经线附近的经度（116.4 北京、121.5 上海、126.5 哈尔滨）：00:30 与 22:30 仍在当日，23:30 仍属真太阳晚子时并进位次日。
+const longitudes = [116.4, 121.5, 126.5];
 const longitudeDates = [
   blankForm('1990', '1', '31', '0', '30'),
   blankForm('2000', '2', '28', '0', '30'),
@@ -339,14 +343,14 @@ const unknownStats = compareGrid(unknownForms);
 
 assert.equal(nonLate.fullDiffs, 0, 'non-23:xx charts at longitude 120 must match main');
 assert.equal(nonLate.starDiffs, 0);
-assert.equal(nonLateLongitude.fullDiffs, 0, 'non-23:xx charts at other longitudes must match main');
+assert.equal(nonLateLongitude.fullDiffs, 0, 'non-23:xx charts at near-120 longitudes must stay on the same day');
 assert.equal(nonLateLongitude.starDiffs, 0);
 assert.equal(unknownStats.fullDiffs, 0, 'unknown time must not shift the chart date');
 assert.equal(unknownStats.starDiffs, 0);
 assert.equal(late.fullDiffs, late.samples, 'every valid 23:xx chart at longitude 120 changes');
 assert.equal(late.starDiffs, late.samples, 'every valid 23:xx chart at longitude 120 changes star layout');
-assert.equal(lateLongitude.fullDiffs, lateLongitude.samples, 'every valid 23:xx chart at other longitudes changes');
-assert.equal(lateLongitude.starDiffs, lateLongitude.samples, 'every valid 23:xx chart at other longitudes changes star layout');
+assert.equal(lateLongitude.fullDiffs, lateLongitude.samples, 'every valid 23:xx chart at near-120 longitudes changes');
+assert.equal(lateLongitude.starDiffs, lateLongitude.samples, 'every valid 23:xx chart at near-120 longitudes changes star layout');
 assert.equal(chartUsesSharedHelper, true, '/chart handleSubmit must call formToBirthInfo(form)');
 
 function expectNote(form: BirthFormState, stamp: string): void {

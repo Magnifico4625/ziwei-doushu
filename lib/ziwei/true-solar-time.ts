@@ -1,7 +1,9 @@
 /**
  * 真太阳时统一计算。
  *
- * 口径：地方真太阳时 = 东八区钟表时间 + 经度修正 + 均时差。
+ * 口径：地方真太阳时 = 钟表时间 + (出生地经度 - 时区标准经线) × 4 分钟 + 均时差。
+ * 默认时区为 UTC+8（东八区，480 分钟，标准经线 120°E）；海外城市可传入各自时区的
+ * `utcOffsetMinutes`（标准经线 = utcOffsetMinutes / 4）。
  * 均时差采用 NOAA 的 fractional-year 近似式，1900-2026 年范围内足以稳定
  * 判断紫微斗数的两小时时辰边界。
  *
@@ -10,6 +12,9 @@
 import { isLeapGregorianYear, isValidGregorianDate } from './gregorian-date';
 
 export { isValidGregorianDate };
+
+/** 默认标准时区：UTC+8（北京时间，标准经线 120°E） */
+export const DEFAULT_UTC_OFFSET_MINUTES = 480;
 
 export interface GregorianDate {
   year: number;
@@ -24,11 +29,20 @@ export interface TrueSolarTimeInput extends GregorianDate {
   clockMinute: number;
   /** 未提供经度时保持原钟表时间，不做真太阳时校正。 */
   longitude?: number;
+  /**
+   * 出生时区相对 UTC 的分钟偏移（默认 480 = UTC+8，标准经线 120°E）。
+   * 海外城市按各自时区标准经线（utcOffsetMinutes / 4）计算经度时差。
+   */
+  utcOffsetMinutes?: number;
+  /** 是否计入 NOAA 均时差（默认 true；仅在 dateValid 且提供经度时生效）。 */
+  includeEquationOfTime?: boolean;
 }
 
 export interface TrueSolarTimeResult {
   dateValid: boolean;
   corrected: boolean;
+  utcOffsetMinutes: number;
+  standardMeridian: number;
   longitudeCorrectionMinutes: number;
   equationOfTimeMinutes: number;
   totalCorrectionMinutes: number;
@@ -41,9 +55,25 @@ export interface TrueSolarTimeResult {
   branch: number;
 }
 
-const MINUTES_PER_DAY = 1440;
 const SECONDS_PER_DAY = 86400;
 const mod = (value: number, base: number) => ((value % base) + base) % base;
+
+/** 由 UTC 偏移分钟数换算该时区的标准经线度数（东经为正，西经为负；1° = 4 分钟）。 */
+export function standardMeridianDegrees(utcOffsetMinutes = DEFAULT_UTC_OFFSET_MINUTES): number {
+  const offset = Number.isFinite(utcOffsetMinutes) ? utcOffsetMinutes : DEFAULT_UTC_OFFSET_MINUTES;
+  return offset / 4;
+}
+
+/** 格式化 UTC 偏移标签，如 `UTC+8`、`UTC+3`、`UTC+5:30`、`UTC-5`。 */
+export function formatUtcOffsetLabel(utcOffsetMinutes = DEFAULT_UTC_OFFSET_MINUTES): string {
+  const offset = Number.isFinite(utcOffsetMinutes) ? Math.round(utcOffsetMinutes) : DEFAULT_UTC_OFFSET_MINUTES;
+  if (offset === 0) return 'UTC+0';
+  const sign = offset > 0 ? '+' : '-';
+  const abs = Math.abs(offset);
+  const hours = Math.floor(abs / 60);
+  const mins = abs % 60;
+  return mins === 0 ? `UTC${sign}${hours}` : `UTC${sign}${hours}:${String(mins).padStart(2, '0')}`;
+}
 
 export function shiftGregorianDate(date: GregorianDate, dayOffset: number): GregorianDate {
   const shifted = new Date(Date.UTC(date.year, date.month - 1, date.day + dayOffset));
@@ -91,9 +121,13 @@ export function branchFromSolarMinutes(normalizedMinutes: number): number {
 
 export function calculateTrueSolarTime(input: TrueSolarTimeInput): TrueSolarTimeResult {
   const dateValid = isValidGregorianDate(input.year, input.month, input.day);
+  const utcOffsetMinutes = input.utcOffsetMinutes !== undefined && Number.isFinite(input.utcOffsetMinutes)
+    ? input.utcOffsetMinutes
+    : DEFAULT_UTC_OFFSET_MINUTES;
+  const standardMeridian = standardMeridianDegrees(utcOffsetMinutes);
   const corrected = input.longitude !== undefined && Number.isFinite(input.longitude);
-  const longitudeCorrectionMinutes = corrected ? (input.longitude! - 120) * 4 : 0;
-  const eot = corrected && dateValid
+  const longitudeCorrectionMinutes = corrected ? (input.longitude! - standardMeridian) * 4 : 0;
+  const eot = corrected && dateValid && input.includeEquationOfTime !== false
     ? equationOfTimeMinutes(input.year, input.month, input.day, input.clockHour, input.clockMinute)
     : 0;
   const totalCorrectionMinutes = longitudeCorrectionMinutes + eot;
@@ -111,6 +145,8 @@ export function calculateTrueSolarTime(input: TrueSolarTimeInput): TrueSolarTime
   return {
     dateValid,
     corrected,
+    utcOffsetMinutes,
+    standardMeridian,
     longitudeCorrectionMinutes,
     equationOfTimeMinutes: eot,
     totalCorrectionMinutes,
