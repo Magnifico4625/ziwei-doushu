@@ -8,7 +8,7 @@
  * 跑: npx tsx scripts/regression/invalid-sample-dates.test.ts
  */
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,6 +16,7 @@ import { astro } from 'iztro';
 import { generateChart } from '../../lib/ziwei/algorithm';
 import {
   daysInGregorianMonth,
+  GREGORIAN_YEAR_MIN,
   isLeapGregorianYear,
   isValidGregorianDate,
 } from '../../lib/ziwei/gregorian-date';
@@ -23,6 +24,7 @@ import {
   isValidLunarDate,
   leapMonthOfLunarYear,
   lunarMonthDayCount,
+  lunarToSolar,
 } from '../../lib/ziwei/lunar-solar';
 import {
   auditV3SampleGrid,
@@ -68,6 +70,18 @@ rejected(1900, 2, 29);
 rejected(2023, 2, 29);
 accepted(2000, 2, 29);
 accepted(2024, 2, 29);
+
+// Date.UTC 把 0–99 折进 1900–1999，main 的往返校验会拒绝。100 年 1 月 1 日仍然是合法公历。
+assert.equal(GREGORIAN_YEAR_MIN, 100);
+for (const year of [0, 1, 99]) {
+  assert.equal(isValidGregorianDate(year, 1, 1), false, `${year}-1-1 was rejected on main`);
+  assert.throws(
+    () => generateChart({ ...base, year, month: 1, day: 1 }),
+    RangeError,
+    `${year}-1-1 must be rejected`,
+  );
+}
+assert.equal(isValidGregorianDate(100, 1, 1), true);
 assert.equal(isLeapGregorianYear(1900), false);
 assert.equal(isLeapGregorianYear(2000), true);
 assert.equal(daysInGregorianMonth(1900, 2), 28);
@@ -176,27 +190,33 @@ for (const date of iterateV3BirthDates(true)) {
 }
 assert.equal(generatedDates * V3_SAMPLE_HOURS * V3_SAMPLE_GENDERS.length, audit.after);
 
-// 农历三十、闰月合法，清洗不能按「日 === 30」一刀切。
-assert.equal(leapMonthOfLunarYear(1906), 4);
-assert.equal(lunarMonthDayCount(1906, 4, true), 30);
-assert.equal(isValidLunarDate(1906, 4, 30, true), true);
-assert.equal(isValidLunarDate(1906, 4, 31, true), false);
-let shortLunarMonth = false;
-for (let year = 2020; year <= 2030 && !shortLunarMonth; year++) {
-  for (let month = 1; month <= 12; month++) {
-    if (lunarMonthDayCount(year, month, false) !== 29) continue;
-    assert.equal(isValidLunarDate(year, month, 30, false), false);
-    assert.equal(isValidLunarDate(year, month, 29, false), true);
-    shortLunarMonth = true;
-    break;
-  }
+// 真实农历：2023 闰二月、2020 闰四月是 29 天；2017 闰六月有三十。这些日期要能换算并排盘，日序不顺延。
+const lunarCases = [
+  { year: 2023, month: 2, day: 1, solar: { year: 2023, month: 3, day: 22 } },
+  { year: 2020, month: 4, day: 1, solar: { year: 2020, month: 5, day: 23 } },
+  { year: 2017, month: 6, day: 30, solar: { year: 2017, month: 8, day: 21 } },
+] as const;
+for (const item of lunarCases) {
+  assert.equal(leapMonthOfLunarYear(item.year), item.month);
+  assert.equal(isValidLunarDate(item.year, item.month, item.day, true), true);
+  assert.deepEqual(lunarToSolar(item.year, item.month, item.day, true), item.solar);
+  const chart = generateChart({ ...base, year: item.solar.year, month: item.solar.month, day: item.solar.day });
+  assert.equal(chart.birthInfo.year, item.solar.year);
+  assert.equal(chart.birthInfo.month, item.solar.month);
+  assert.equal(chart.birthInfo.day, item.solar.day);
 }
-assert.equal(shortLunarMonth, true);
+assert.equal(lunarMonthDayCount(2017, 6, true), 30);
+assert.equal(lunarMonthDayCount(2023, 2, true), 29);
+assert.equal(lunarMonthDayCount(2020, 4, true), 29);
+assert.equal(isValidLunarDate(2023, 2, 30, true), false);
+assert.equal(isValidLunarDate(2020, 4, 30, true), false);
+assert.equal(lunarToSolar(2023, 2, 30, true), null);
+assert.equal(lunarToSolar(2020, 4, 30, true), null);
 
 interface FixtureRecord {
   id: string;
   birthInfo?: { year: number; month: number; day: number; hour: number; gender: 'male' | 'female' };
-  lunarInfo?: { lunarDay: number; isLeapMonth: boolean };
+  lunarInfo?: { lunarYear?: number; lunarMonth?: number; lunarDay: number; isLeapMonth: boolean };
   filename?: string;
 }
 
@@ -211,9 +231,9 @@ const fixture: FixtureRecord[] = [
   { id: 'year-1900', birthInfo: { year: 1900, month: 2, day: 29, hour: 1, gender: 'male' } },
   { id: 'year-2000', birthInfo: { year: 2000, month: 2, day: 29, hour: 1, gender: 'male' } },
   {
-    id: 'lunar-day-30',
-    birthInfo: { year: 1925, month: 4, day: 30, hour: 2, gender: 'male' },
-    lunarInfo: { lunarDay: 30, isLeapMonth: true },
+    id: 'lunar-2017-leap6-day30',
+    birthInfo: { year: 2017, month: 8, day: 21, hour: 2, gender: 'male' },
+    lunarInfo: { lunarYear: 2017, lunarMonth: 6, lunarDay: 30, isLeapMonth: true },
   },
   { id: 'lunar-only', lunarInfo: { lunarDay: 30, isLeapMonth: true } },
 ];
@@ -239,7 +259,7 @@ assert.equal(partitioned.stats.before, fixture.length);
 assert.equal(partitioned.stats.removed, 4);
 assert.equal(partitioned.stats.unrecognized, 1);
 assert.equal(partitioned.unrecognized[0]?.id, 'lunar-only');
-assert.equal(partitioned.kept.some((record) => record.id === 'lunar-day-30'), true);
+assert.equal(partitioned.kept.some((record) => record.id === 'lunar-2017-leap6-day30'), true);
 assert.equal(partitioned.kept.some((record) => record.id === 'leap-feb-29'), true);
 assert.equal(partitioned.kept.some((record) => record.id === 'year-2000'), true);
 assert.equal(marchContentDuplicateCount(slots(partitioned.kept)), 0);
@@ -271,9 +291,9 @@ const files: Record<string, unknown> = {
   '2024-02-30-h00-female.json': { birthInfo: { year: 2024, month: 2, day: 30, hour: 0, gender: 'female' } },
   '1900-02-29-h01-male.json': { birthInfo: { year: 1900, month: 2, day: 29, hour: 1, gender: 'male' } },
   '2000-02-29-h01-male.json': { birthInfo: { year: 2000, month: 2, day: 29, hour: 1, gender: 'male' } },
-  '1925-04-30-h02-male.json': {
-    birthInfo: { year: 1925, month: 4, day: 30, hour: 2, gender: 'male' },
-    lunarInfo: { lunarDay: 30, isLeapMonth: true },
+  '2017-08-21-h02-male.json': {
+    birthInfo: { year: 2017, month: 8, day: 21, hour: 2, gender: 'male' },
+    lunarInfo: { lunarYear: 2017, lunarMonth: 6, lunarDay: 30, isLeapMonth: true },
   },
   'lunar-leap-month.json': { calendar: 'lunar', month: 4, day: 30, isLeapMonth: true },
   '2023-02-30-h03-male.json': {},
@@ -292,18 +312,17 @@ async function cleanFixtures(): Promise<void> {
     assert.equal(directoryStats.errors.length, 0);
     const written = readdirSync(outputDir).sort();
     assert.deepEqual(written, [
-      '1925-04-30-h02-male.json',
       '2000-02-29-h01-male.json',
+      '2017-08-21-h02-male.json',
       '2023-03-01-h00-male.json',
       '2023-03-02-h00-male.json',
       '2024-02-29-h00-female.json',
       'lunar-leap-month.json',
     ]);
-    const keptLunar = JSON.parse(readFileSync(path.join(outputDir, '1925-04-30-h02-male.json'), 'utf8')) as {
-      lunarInfo: { lunarDay: number; isLeapMonth: boolean };
+    const keptLunar = JSON.parse(readFileSync(path.join(outputDir, '2017-08-21-h02-male.json'), 'utf8')) as {
+      lunarInfo: { lunarYear: number; lunarMonth: number; lunarDay: number; isLeapMonth: boolean };
     };
-    assert.equal(keptLunar.lunarInfo.lunarDay, 30);
-    assert.equal(keptLunar.lunarInfo.isLeapMonth, true);
+    assert.deepEqual(keptLunar.lunarInfo, { lunarYear: 2017, lunarMonth: 6, lunarDay: 30, isLeapMonth: true });
 
     const jsonlPath = path.join(root, 'samples.jsonl');
     const jsonlOut = path.join(root, 'clean.jsonl');
@@ -317,6 +336,40 @@ async function cleanFixtures(): Promise<void> {
     assert.equal(jsonlIds.includes('bad-2023-02-30'), false);
     assert.equal(jsonlIds.includes('mar-1'), true);
     assert.equal(jsonlIds.includes('lunar-only'), true);
+    assert.equal(jsonlIds.includes('lunar-2017-leap6-day30'), true);
+
+    const crlfPath = path.join(root, 'crlf.jsonl');
+    const crlfOut = path.join(root, 'crlf-clean.jsonl');
+    const crlfInput = [
+      '{"id":"ok","birthInfo":{"year":2024,"month":2,"day":29,"hour":0,"gender":"female"}}',
+      '{not json',
+      '{"id":"bad-name","filename":"2023-02-30-h00-male.json"}',
+      '{"id":"good-name","filename":"2024-02-29-h00-female.json"}',
+    ].join('\r\n') + '\r\n';
+    writeFileSync(crlfPath, crlfInput);
+    const crlfStats = await cleanSampleJsonl(crlfPath, crlfOut);
+    assert.equal(crlfStats.before, 4);
+    assert.equal(crlfStats.removed, 1);
+    assert.equal(crlfStats.kept, 2);
+    assert.equal(crlfStats.unrecognized, 0);
+    assert.equal(crlfStats.errors.length, 1);
+    assert.match(crlfStats.errors[0] ?? '', /^line 2: /);
+    const crlfRaw = readFileSync(crlfOut, 'utf8');
+    assert.equal(crlfRaw, [
+      '{"id":"ok","birthInfo":{"year":2024,"month":2,"day":29,"hour":0,"gender":"female"}}',
+      '{not json',
+      '{"id":"good-name","filename":"2024-02-29-h00-female.json"}',
+    ].join('\r\n') + '\r\n');
+    assert.equal(crlfRaw.includes('\r\n'), true);
+
+    const cliBad = spawnSync(process.execPath, [
+      path.resolve('node_modules/tsx/dist/cli.mjs'),
+      path.resolve('scripts/dataset/clean-v3-samples.ts'),
+      '--input', crlfPath,
+      '--output', path.join(root, 'crlf-cli.jsonl'),
+    ], { encoding: 'utf8' });
+    assert.equal(cliBad.status, 1);
+    assert.match(cliBad.stderr, /line 2: /);
 
     const cli = execFileSync(process.execPath, [
       path.resolve('node_modules/tsx/dist/cli.mjs'),

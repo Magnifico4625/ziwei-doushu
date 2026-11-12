@@ -16,7 +16,6 @@
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readdir, readFile, stat, copyFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
 import { auditV3SampleGrid, classifyDeclaredSampleDate } from '../../lib/ziwei/sample-dates';
 
 export interface FileCleanStats {
@@ -42,6 +41,13 @@ function birthInfoOf(value: unknown): { year?: unknown; month?: unknown; day?: u
   const info = (value as { birthInfo?: unknown }).birthInfo;
   if (!info || typeof info !== 'object') return null;
   return info as { year?: unknown; month?: unknown; day?: unknown };
+}
+
+/** JSONL 行里的 filename，和目录模式的文件名一样，只在没有公历 birthInfo 时当后备。 */
+function filenameOf(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || !('filename' in value)) return undefined;
+  const name = (value as { filename?: unknown }).filename;
+  return typeof name === 'string' ? name : undefined;
 }
 
 async function walkJson(dir: string): Promise<string[]> {
@@ -95,28 +101,59 @@ export async function cleanSampleDirectory(inputDir: string, outputDir?: string)
 export async function cleanSampleJsonl(inputFile: string, outputFile?: string): Promise<FileCleanStats> {
   if (outputFile) assertOutputOutsideInput(inputFile, outputFile);
   const stats: FileCleanStats = { before: 0, removed: 0, kept: 0, unrecognized: 0, errors: [] };
-  const lines = createInterface({ input: createReadStream(inputFile, 'utf8'), crlfDelay: Infinity });
-  const sink = outputFile ? createWriteStream(outputFile, 'utf8') : null;
   if (outputFile) await mkdir(path.dirname(outputFile), { recursive: true });
-  for await (const line of lines) {
-    if (!line.trim()) continue;
+  const sink = outputFile ? createWriteStream(outputFile) : null;
+  let pending = '';
+  let lineNumber = 0;
+
+  const takeLine = (text: string, ending: '\n' | '\r\n' | '') => {
+    lineNumber += 1;
+    const raw = text + ending;
+    if (!text.trim()) {
+      sink?.write(raw);
+      return;
+    }
     stats.before += 1;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(line);
+      parsed = JSON.parse(text);
     } catch (error) {
-      stats.errors.push(`line ${stats.before}: ${(error as Error).message}`);
-      continue;
+      const reason = error instanceof Error ? error.message : String(error);
+      stats.errors.push(`line ${lineNumber}: ${reason}`);
+      sink?.write(raw);
+      return;
     }
-    const { decision } = classifyDeclaredSampleDate({ birthInfo: birthInfoOf(parsed) });
+    const { decision } = classifyDeclaredSampleDate({
+      birthInfo: birthInfoOf(parsed),
+      filename: filenameOf(parsed),
+    });
     if (decision === 'drop') {
       stats.removed += 1;
-      continue;
+      return;
     }
     if (decision === 'unrecognized') stats.unrecognized += 1;
     else stats.kept += 1;
-    sink?.write(`${line}\n`);
+    sink?.write(raw);
+  };
+
+  const stream = createReadStream(inputFile);
+  for await (const chunk of stream) {
+    pending += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    let newlineAt = pending.indexOf('\n');
+    while (newlineAt !== -1) {
+      let text = pending.slice(0, newlineAt);
+      pending = pending.slice(newlineAt + 1);
+      let ending: '\n' | '\r\n' = '\n';
+      if (text.endsWith('\r')) {
+        text = text.slice(0, -1);
+        ending = '\r\n';
+      }
+      takeLine(text, ending);
+      newlineAt = pending.indexOf('\n');
+    }
   }
+  if (pending.length > 0) takeLine(pending, '');
+
   if (sink) {
     await new Promise<void>((resolve, reject) => {
       sink.end(() => resolve());
@@ -140,6 +177,7 @@ async function main(): Promise<void> {
   const stats = inputStat.isDirectory()
     ? await cleanSampleDirectory(input, output)
     : await cleanSampleJsonl(input, output);
+  for (const message of stats.errors) console.error(message);
   console.log(JSON.stringify({ files: stats }));
   if (stats.errors.length) process.exitCode = 1;
 }
