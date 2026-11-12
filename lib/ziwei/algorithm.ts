@@ -179,6 +179,8 @@ export function resolveEffectiveLunarDate(
 
   let lunarDay = rawLunarDay;
   try {
+    // origin-month 走负月：按闰月自己的天数夹日。闰月有三十就保留三十。
+    // 本月（正数月）只有 29 天时，三十仍是真实闰月日，不能按本月夹成二十九。
     const monthKey = isLeapMonth ? -lunarMonth : lunarMonth;
     const dayCount = LunarMonth.fromYm(lunarYear, monthKey)?.getDayCount?.();
     if (typeof dayCount === 'number' && dayCount > 0 && lunarDay > dayCount) lunarDay = dayCount;
@@ -459,14 +461,28 @@ export function generateChart(
 
   // 闰月处理（流派分歧：归本月 / 归下月 / 前后半分）
   // 默认 = DEFAULT_LEAP_MONTH（2026-09-05 起 split：主流排盘默认口径「月中分界」，150 组金标准盘对照验证；倪师派归下月可经流派抽屉切 next-month）
-  // 非 split 时先算农历，闰月才切 byLunar；非闰月仍走 bySolar，与 split 行为完全一致
+  // 非 split、且非 origin-month 时，先算农历，闰月才切 byLunar；非闰月仍走 bySolar，与 split 行为完全一致
   const leapMode = opts?.leapMonth ?? DEFAULT_LEAP_MONTH;
   const effectiveLunar = resolveEffectiveLunarDate(year, month, day, leapMode);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let astrolabe: any;
 
-  if (leapMode !== 'split' && effectiveLunar.rawLunarMonth < 0) {
+  if (leapMode === 'origin-month' && effectiveLunar.rawLunarMonth < 0) {
+    // 保持闰月 = iztro fixLeap:false（docs.iztro.com/posts/astrolabe：不把闰月拆成前后半月）。
+    // fixLunarMonthIndex 只在 fixLeap && 日>15 时把月份 +1，所以命宫/月系星仍用本月序号，
+    // 日序用 solar2lunar 读到的真实农历日。闰六月三十就是三十，不是本月没有的二十九。
+    //
+    // 不能走 astro.byLunar。lunar-lite lunar2solar 先 Lunar.fromYmd(年, 正数月, 日)，
+    // 再决定是否改成负月；lunar-typescript 在本月天数不够时抛
+    // `only N days in lunar year Y month M`，负月重建执行不到。
+    // 2017 六月 29 天、闰六月 30 天，lunar2solar('2017-6-30', true) 因此失败，
+    // 而 Lunar.fromYmd(2017, -6, 30) 就是公历 2017-08-21。
+    // 本月也有这一天时，byLunar(闰月, isLeapMonth=true, fixLeap=false)
+    // 与 bySolar(原公历, fixLeap=false) 同盘；三十日本月不存在时只走后者。
+    // 夹到廿九或滚进下月初一会排成另一天的盘。
+    astrolabe = astro.bySolar(`${year}-${month}-${day}`, hour, iztroGender, false, 'zh-CN');
+  } else if (leapMode !== 'split' && effectiveLunar.rawLunarMonth < 0) {
       // 闰月生人 → 按用户选项切换月份归属
       const lunarDateStr = `${effectiveLunar.lunarYear}-${effectiveLunar.lunarMonth}-${effectiveLunar.lunarDay}`;
       astrolabe = astro.byLunar(
