@@ -5,6 +5,7 @@ import type { ZiweiChart, Palace, Star } from '@/lib/ziwei/types';
 import { BRANCHES, STEMS } from '@/lib/ziwei/constants';
 import PalaceCell from './PalaceCell';
 import TimeNav, { type TimeView, getYearStemIndex, buildSiHuaOverlay } from './TimeNav';
+import { lateZiNoteForChart } from '@/lib/ziwei/share';
 
 interface ChartBoardProps {
   chart: ZiweiChart;
@@ -73,6 +74,7 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
     return {};
   })();
   const overlayLabel = timeView === 'daxian' ? '限' : timeView === 'liunian' ? '年' : undefined;
+  const lateZiNote = lateZiNoteForChart(chart.birthInfo);
 
   const handlePalaceClick = (branch: number) => {
     const isDeselecting = selectedBranch === branch;
@@ -110,6 +112,11 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
         <h2 className="text-sm tracking-[0.25em] font-medium" style={{ color: 'var(--t-gold)' }}>
           {chart.birthInfo.name ? `${chart.birthInfo.name} · ` : ''}紫微斗数命盘
         </h2>
+        {lateZiNote && (
+          <p className="text-[11px] leading-relaxed mt-2 px-4" style={{ color: 'var(--t-gold)' }}>
+            {lateZiNote}
+          </p>
+        )}
       </motion.div>
 
       {/* 4x4 命盘网格（含 SVG 叠加层） */}
@@ -182,6 +189,11 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
             {chart.lunarInfo.lunarYear}·{chart.lunarInfo.isLeapMonth ? '闰' : ''}
             {chart.lunarInfo.lunarMonth}·{chart.lunarInfo.lunarDay}
           </div>
+          {lateZiNote && (
+            <div className="text-[8px] text-center leading-relaxed px-2" style={{ color: 'var(--t-gold)', opacity: 0.9 }}>
+              {lateZiNote}
+            </div>
+          )}
         </motion.div>
 
         {/* ── 三方四正 SVG 连线（绝对定位在 grid 内部，受 overflow:hidden 裁切） ── */}

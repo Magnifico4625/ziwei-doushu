@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { BirthInfo } from '@/lib/ziwei/types';
 import { daysInGregorianMonth, isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { SHICHEN } from '@/lib/ziwei/constants';
-import { calcTrueSolarBranch, formToBirthInfo } from '@/lib/ziwei/share';
+import { calcTrueSolarBranch, formToBirthInfo, lateZiNoteForChart } from '@/lib/ziwei/share';
 import { useTheme } from '@/components/ThemeProvider';
 import { PROVINCES } from '@/lib/ziwei/cities';
 
@@ -117,6 +117,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
 
   // ─── Summary chip：全部必填完成后显示 ───────────────────
   const showSummary = steps[0] && steps[2] && !hasError;
+  const lateZiNote = showSummary ? lateZiNoteForChart(formToBirthInfo(form)) : '';
   const summaryText = showSummary
     ? [
         `${y}年${m}月${d}日`,
@@ -442,13 +443,20 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               borderRadius: '12px',
               padding: '9px 14px',
               display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
+              flexDirection: 'column',
+              gap: '4px',
             }}>
-              <span style={{ fontSize: '12px', color: summaryClr }}>✓</span>
-              <span style={{ fontSize: '11px', color: summaryClr, letterSpacing: '0.03em', flex: 1 }}>
-                {summaryText}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', color: summaryClr }}>✓</span>
+                <span style={{ fontSize: '11px', color: summaryClr, letterSpacing: '0.03em', flex: 1 }}>
+                  {summaryText}
+                </span>
+              </div>
+              {lateZiNote && (
+                <span style={{ fontSize: '11px', color: summaryClr, letterSpacing: '0.02em', lineHeight: 1.45, paddingLeft: '20px' }}>
+                  {lateZiNote}
+                </span>
+              )}
             </div>
           </motion.div>
         )}

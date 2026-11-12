@@ -9,6 +9,7 @@
 
 import type { ZiweiChart } from '@/lib/ziwei/types';
 import { SITE_HOST } from '@/lib/site';
+import { lateZiNoteForChart } from '@/lib/ziwei/share';
 
 const BRANCH_NAMES = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
 
@@ -39,6 +40,7 @@ interface ShareCardProps {
 }
 
 export default function ShareCardCanvas({ chart, birth, highlight }: ShareCardProps) {
+  const lateZiNote = lateZiNoteForChart(chart.birthInfo);
   const mingPalace = chart.palaces.find(p => p.branch === chart.mingGongBranch);
   const mingMajorStars = mingPalace?.stars.filter(s => s.type === 'major').map(s => s.name) ?? [];
   const mingStarStr = mingMajorStars.length > 0 ? mingMajorStars.join('·') : '空宫';
@@ -103,6 +105,11 @@ export default function ShareCardCanvas({ chart, birth, highlight }: ShareCardPr
             {birth.gender === 'male' ? '男命' : '女命'}
             {birth.city && <><span style={{ margin: '0 4px', color: '#b8922a' }}>·</span>{birth.city}</>}
           </div>
+          {lateZiNote && (
+            <div style={{ fontSize: '8px', color: '#8b6a14', letterSpacing: '0.04em', marginTop: '2px', maxWidth: '280px', textAlign: 'right', lineHeight: 1.35 }}>
+              {lateZiNote}
+            </div>
+          )}
           <div style={{ fontSize: '8px', color: '#b8922a', letterSpacing: '0.08em', marginTop: '2px' }}>
             {SITE_HOST}
           </div>

@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import type { ZiweiChart } from '@/lib/ziwei/types';
 import { BRANCHES, STEMS } from '@/lib/ziwei/constants';
 import { detectPatterns, getMingGongSummary } from '@/lib/ziwei/patterns';
+import { lateZiNoteForChart } from '@/lib/ziwei/share';
 
 interface ChartSummaryProps {
   chart: ZiweiChart;
@@ -17,6 +18,7 @@ const PatternLevelStyle = {
 
 export default function ChartSummary({ chart }: ChartSummaryProps) {
   const patterns = detectPatterns(chart);
+  const lateZiNote = lateZiNoteForChart(chart.birthInfo);
   const { stars: mingStars, keywords, nature } = getMingGongSummary(chart);
   const currentDx = chart.daXians[chart.currentDaXianIndex];
 
@@ -99,6 +101,7 @@ export default function ChartSummary({ chart }: ChartSummaryProps) {
         <div className="mt-4 pt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px]"
           style={{ borderTop: '1px solid var(--t-border)', color: 'var(--t-faint)' }}>
           <span>公历 {chart.birthInfo.year}-{chart.birthInfo.month}-{chart.birthInfo.day}</span>
+          {lateZiNote && <span>{lateZiNote}</span>}
           <span>
             农历 {chart.lunarInfo.lunarYear}年{chart.lunarInfo.isLeapMonth ? '闰' : ''}
             {chart.lunarInfo.lunarMonth}月{chart.lunarInfo.lunarDay}日

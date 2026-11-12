@@ -21,7 +21,15 @@ import { generateChart } from '../../lib/ziwei/algorithm';
 import { isValidGregorianDate } from '../../lib/ziwei/gregorian-date';
 import { lunarToSolar } from '../../lib/ziwei/lunar-solar';
 import { SCHOOL_DEFAULT_CONFIG } from '../../lib/ziwei/school-config';
-import { calcTrueSolarBranch, formToBirthInfo } from '../../lib/ziwei/share';
+import {
+  calcTrueSolarBranch,
+  formToBirthInfo,
+  formToSearchParams,
+  isLateZiNextDay,
+  lateZiNoteForChart,
+  lateZiShiftNote,
+  searchParamsToForm,
+} from '../../lib/ziwei/share';
 import type { BirthInfo, ZiweiChart } from '../../lib/ziwei/types';
 
 assert.equal(
@@ -341,9 +349,94 @@ assert.equal(lateLongitude.fullDiffs, lateLongitude.samples, 'every valid 23:xx 
 assert.equal(lateLongitude.starDiffs, lateLongitude.samples, 'every valid 23:xx chart at other longitudes changes star layout');
 assert.equal(chartUsesSharedHelper, true, '/chart handleSubmit must call formToBirthInfo(form)');
 
+function expectNote(form: BirthFormState, stamp: string): void {
+  const info = formToBirthInfo(form);
+  assert.deepEqual(info.origInput, {
+    year: Number(form.year),
+    month: Number(form.month),
+    day: Number(form.day),
+    clockHour: Number(form.clockHour),
+    clockMinute: Number(form.clockMinute),
+  });
+  assert.equal(isLateZiNextDay(info), true, stamp);
+  assert.equal(lateZiNoteForChart(info, 'zh'), `晚子时：按次日排盘（输入 ${stamp}）`);
+  assert.equal(lateZiShiftNote(info.origInput!, 'en'), `Late Zi hour: charted on the next day (entered ${stamp})`);
+  assert.equal(lateZiShiftNote(info.origInput!, 'ru'), `Поздний час Цзы: карта считается по следующему дню (ввод ${stamp})`);
+  const { origInput: _orig, ...bare } = info;
+  assert.equal(fullHash(generateChart(info)), fullHash(generateChart(bare)), `${stamp} chart sha`);
+}
+
+function expectNoNote(form: BirthFormState): void {
+  const info = formToBirthInfo(form);
+  assert.equal(isLateZiNextDay(info), false);
+  assert.equal(lateZiNoteForChart(info, 'zh'), '');
+  assert.equal(lateZiNoteForChart(info, 'en'), '');
+  assert.equal(lateZiNoteForChart(info, 'ru'), '');
+  if (form.unknownTime) assert.equal(info.origInput, undefined);
+  else assert.equal(info.origInput?.clockHour === 23, false);
+}
+
+expectNote(blankForm('1990', '1', '31', '23', '30'), '1990-01-31 23:30');
+expectNote(blankForm('1990', '1', '31', '23', '0'), '1990-01-31 23:00');
+expectNote(blankForm('1990', '1', '31', '23', '59'), '1990-01-31 23:59');
+expectNote(blankForm('1990', '12', '31', '23', '30'), '1990-12-31 23:30');
+expectNote(blankForm('1990', '12', '31', '23', '59'), '1990-12-31 23:59');
+expectNote(blankForm('1990', '2', '28', '23', '30'), '1990-02-28 23:30');
+expectNote(blankForm('1900', '2', '28', '23', '30'), '1900-02-28 23:30');
+expectNote(blankForm('2023', '2', '28', '23', '30'), '2023-02-28 23:30');
+expectNote(blankForm('2000', '2', '28', '23', '30'), '2000-02-28 23:30');
+expectNote(blankForm('2000', '2', '29', '23', '0'), '2000-02-29 23:00');
+expectNote(blankForm('2000', '2', '29', '23', '59'), '2000-02-29 23:59');
+expectNote(blankForm('2024', '2', '28', '23', '30'), '2024-02-28 23:30');
+expectNote(blankForm('2024', '2', '29', '23', '30'), '2024-02-29 23:30');
+
+expectNoNote(blankForm('1990', '1', '31', '0', '30'));
+expectNoNote(blankForm('1990', '1', '31', '0', '0'));
+expectNoNote(blankForm('1990', '1', '31', '0', '59'));
+expectNoNote(blankForm('2000', '12', '31', '0', '0'));
+expectNoNote(blankForm('1990', '12', '31', '22', '59'));
+expectNoNote(blankForm('2024', '2', '29', '0', '30'));
+expectNoNote(blankForm('1990', '6', '15', '8', '30'));
+expectNoNote(unknown);
+
+const shareForm = blankForm('1990', '1', '31', '23', '30');
+const shareParams = formToSearchParams(shareForm);
+assert.equal(shareParams.get('y'), '1990');
+assert.equal(shareParams.get('m'), '1');
+assert.equal(shareParams.get('d'), '31');
+assert.equal(shareParams.get('h'), '23');
+assert.equal(shareParams.get('mi'), '30');
+const restored = searchParamsToForm(shareParams);
+assert.ok(restored);
+assert.equal(
+  lateZiNoteForChart(formToBirthInfo({ ...shareForm, ...restored })),
+  '晚子时：按次日排盘（输入 1990-01-31 23:30）',
+);
+
+assert.match(birthFormSrc, /lateZiNoteForChart\(formToBirthInfo\(form\)\)/);
+assert.match(readFileSync(path.resolve('components/ChartBoard.tsx'), 'utf8'), /lateZiNoteForChart\(chart\.birthInfo\)/);
+assert.match(readFileSync(path.resolve('components/ChartSummary.tsx'), 'utf8'), /lateZiNoteForChart\(chart\.birthInfo\)/);
+assert.match(readFileSync(path.resolve('components/ShareCardCanvas.tsx'), 'utf8'), /lateZiNoteForChart\(chart\.birthInfo\)/);
+
+let shaSamples = 0;
+let shaDiffs = 0;
+for (const form of gridForms(['0', '8', '22', '23'], ['30'])) {
+  const year = parseInt(form.year, 10);
+  const month = parseInt(form.month, 10);
+  const day = parseInt(form.day, 10);
+  if (!isValidGregorianDate(year, month, day)) continue;
+  const info = formToBirthInfo(form);
+  const { origInput: _orig, ...bare } = info;
+  shaSamples += 1;
+  if (fullHash(generateChart(info)) !== fullHash(generateChart(bare))) shaDiffs += 1;
+}
+assert.equal(shaDiffs, 0, 'origInput must not change the computed chart');
+assert.ok(shaSamples > 0);
+
 console.log(
   `late zi /chart vs share: non-23 full diffs ${nonLate.fullDiffs}/${nonLate.samples}, `
   + `star diffs ${nonLate.starDiffs}; longitude non-23 ${nonLateLongitude.fullDiffs}/${nonLateLongitude.samples}; `
   + `23:xx full diffs ${late.fullDiffs}/${late.samples}, star diffs ${late.starDiffs}; `
-  + `longitude 23:xx full diffs ${lateLongitude.fullDiffs}/${lateLongitude.samples}, star diffs ${lateLongitude.starDiffs}`,
+  + `longitude 23:xx full diffs ${lateLongitude.fullDiffs}/${lateLongitude.samples}, star diffs ${lateLongitude.starDiffs}; `
+  + `origInput sha diffs ${shaDiffs}/${shaSamples}`,
 );
