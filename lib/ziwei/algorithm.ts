@@ -10,6 +10,7 @@ import { BRANCHES, STEMS } from './constants';
 import { schoolStarBrightness, type BrightnessSchool } from './school-data';
 import { SCHOOL_AX } from './school-tables.generated';
 import { DEFAULT_LEAP_MONTH } from './school-config';
+import { isValidGregorianDate } from './gregorian-date';
 // 飞星派工具仅供导出，不再在排盘时调用（倪师《天纪 03》：四化星永远固定不动）
 // import { detectSelfSihua, getSiHuaByStem } from './sihua';
 
@@ -449,13 +450,9 @@ export function generateChart(
   if (!Number.isInteger(hour) || hour < 0 || hour > 11) {
     throw new RangeError(`hour must be an integer branch index from 0 to 11; received ${hour}`);
   }
-  // 公历日期必须真实存在：2 月 30 日、非闰年 2 月 29 日、4 月 31 日这类日期，
-  // iztro 不报错而是顺延成下个月的头几天排盘，结果会和真实日期的盘重复。
-  const probe = new Date(Date.UTC(year, month - 1, day));
-  if (
-    !Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day) ||
-    probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day
-  ) {
+  // 公历日期必须真实存在。iztro 遇到 2 月 30 日、平年 2 月 29 日不会报错，
+  // 农历换算会落到 3 月 1–2 日，命盘和真实的 3 月样本重复。这里在排盘前直接拒绝。
+  if (!isValidGregorianDate(year, month, day)) {
     throw new RangeError(`solar date does not exist: ${year}-${month}-${day}`);
   }
   const iztroGender = gender === 'male' ? '男' : '女';

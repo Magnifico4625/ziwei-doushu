@@ -2,6 +2,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { BirthInfo } from '@/lib/ziwei/types';
+import { daysInGregorianMonth, isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { SHICHEN } from '@/lib/ziwei/constants';
 import { useTheme } from '@/components/ThemeProvider';
 import { PROVINCES } from '@/lib/ziwei/cities';
@@ -40,11 +41,17 @@ function calcTrueSolarBranch(clockHour: number, clockMinute: number, longitude: 
   return Math.floor((solar - 60) / 120) + 1;
 }
 
-/** 检查日期是否合法 */
+/** 检查公历日期是否真实存在（不用 Date 顺延结果）。 */
 function isValidDate(y: number, m: number, d: number): boolean {
-  if (!y || !m || !d) return false;
-  const date = new Date(y, m - 1, d);
-  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d;
+  return isValidGregorianDate(y, m, d);
+}
+
+/** 下拉框里只放这个公历月真正有的日子。年份未选时，2 月最多到 29，绝不到 30。 */
+function selectableDayCount(year: number, month: number): number {
+  if (month === 2 && !year) return 29;
+  if (year && month >= 1 && month <= 12) return daysInGregorianMonth(year, month);
+  if (month === 4 || month === 6 || month === 9 || month === 11) return 30;
+  return 31;
 }
 
 export default function BirthForm({ onSubmit, loading, initialData, onFormSave, hideSubmit }: BirthFormProps) {
@@ -279,7 +286,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               required
             >
               <option value="">日期</option>
-              {Array.from({ length: 31 }, (_, i) => i + 1).map(dy => (
+              {Array.from({ length: selectableDayCount(y, m) }, (_, i) => i + 1).map(dy => (
                 <option key={dy} value={String(dy)}>{dy} 日</option>
               ))}
             </select>
