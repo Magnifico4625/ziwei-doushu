@@ -4,7 +4,17 @@ import { motion, AnimatePresence } from 'framer-motion';
 import type { BirthInfo } from '@/lib/ziwei/types';
 import { daysInGregorianMonth, isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { SHICHEN } from '@/lib/ziwei/constants';
-import { calcTrueSolarBranch, formToBirthInfo, lateZiNoteForChart } from '@/lib/ziwei/share';
+import {
+  formToBirthInfo,
+  lateZiNoteForChart,
+  resolveFormTrueSolarTime,
+  resolveFormUtcOffsetMinutes,
+} from '@/lib/ziwei/share';
+import {
+  DEFAULT_UTC_OFFSET_MINUTES,
+  formatUtcOffsetLabel,
+  standardMeridianDegrees,
+} from '@/lib/ziwei/true-solar-time';
 import { useTheme } from '@/components/ThemeProvider';
 import { PROVINCES } from '@/lib/ziwei/cities';
 
@@ -19,6 +29,7 @@ export interface BirthFormState {
   province: string;
   city: string;
   longitude: number;
+  utcOffsetMinutes?: number;
   gender: 'male' | 'female';
 }
 
@@ -61,6 +72,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     province: initialData?.province ?? '',
     city: initialData?.city ?? '',
     longitude: initialData?.longitude ?? 120,
+    utcOffsetMinutes: initialData?.utcOffsetMinutes,
     gender: initialData?.gender ?? 'male',
   });
 
@@ -78,19 +90,26 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     return prov ? prov.cities : [];
   }, [form.province]);
 
-  const branch = useMemo(() => {
-    if (form.unknownTime) return 0;
-    return calcTrueSolarBranch(
-      parseInt(form.clockHour) || 0,
-      parseInt(form.clockMinute) || 0,
-      form.longitude,
-    );
-  }, [form.clockHour, form.clockMinute, form.longitude, form.unknownTime]);
+  const solarPreview = useMemo(() => {
+    if (form.unknownTime) return null;
+    return resolveFormTrueSolarTime(form);
+  }, [form]);
 
-  const offsetMin = Math.round((form.longitude - 120) * 4);
+  const branch = solarPreview ? solarPreview.branch : 0;
+  const tzOffsetMin = resolveFormUtcOffsetMinutes(form) ?? DEFAULT_UTC_OFFSET_MINUTES;
+  const standardMeridian = standardMeridianDegrees(tzOffsetMin);
+  const offsetMin = solarPreview
+    ? Math.round(solarPreview.totalCorrectionMinutes)
+    : Math.round((form.longitude - standardMeridian) * 4);
+  const longitudeLabel = form.longitude >= 0
+    ? `经度 ${form.longitude.toFixed(1)}°E`
+    : `经度 ${Math.abs(form.longitude).toFixed(1)}°W`;
+  const tzLabel = tzOffsetMin !== DEFAULT_UTC_OFFSET_MINUTES
+    ? ` · ${formatUtcOffsetLabel(tzOffsetMin)}`
+    : '';
   const shichenInfo = SHICHEN[branch];
 
-  // ─── 校验逻辑 ───────────────────────────────────────────
+  // ─── 校验逻辑 ─────────────────────────────────────────
   const y = parseInt(form.year) || 0;
   const m = parseInt(form.month) || 0;
   const d = parseInt(form.day) || 0;
@@ -106,7 +125,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   };
   const hasError = Object.values(errors).some(Boolean);
 
-  // ─── 完成度（用于进度条） ────────────────────────────────
+  // ─── 完成度（用于进度条） ────────────────────────────
   const steps = [
     !!form.year && !!form.month && !!form.day && !errors.year && !errors.month && !errors.day,
     !!form.province && !!form.city,
@@ -130,13 +149,24 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   const handleProvince = (prov: string) => {
     const provData = PROVINCES.find(p => p.name === prov);
     const firstCity = provData?.cities[0];
-    setForm({ ...form, province: prov, city: firstCity?.name || '', longitude: firstCity?.longitude ?? 120 });
+    setForm({
+      ...form,
+      province: prov,
+      city: firstCity?.name || '',
+      longitude: firstCity?.longitude ?? 120,
+      utcOffsetMinutes: firstCity?.utcOffsetMinutes,
+    });
   };
 
   const handleCity = (cityName: string) => {
     const prov = PROVINCES.find(p => p.name === form.province);
     const cityData = prov?.cities.find(c => c.name === cityName);
-    setForm({ ...form, city: cityName, longitude: cityData?.longitude ?? 120 });
+    setForm({
+      ...form,
+      city: cityName,
+      longitude: cityData?.longitude ?? 120,
+      utcOffsetMinutes: cityData?.utcOffsetMinutes,
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -328,7 +358,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               exit={{ opacity: 0 }}
               style={{ fontSize: '10px', color: isDark ? 'rgba(180,210,235,0.85)' : 'rgba(100,70,10,0.5)', marginTop: '5px' }}
             >
-              {form.city || '（请选择城市）'} · 经度 {form.longitude.toFixed(1)}°E · 时差 {offsetMin > 0 ? '+' : ''}{offsetMin} 分钟
+              {form.city || '（请选择城市）'} · {longitudeLabel}{tzLabel} · 时差 {offsetMin > 0 ? '+' : ''}{offsetMin} 分钟
             </motion.p>
           ) : (
             <motion.p
@@ -346,7 +376,11 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
 
       {/* ── 出生时间 ── */}
       <div style={{ marginBottom: '16px' }}>
-        <label style={{ display: 'block', fontSize: '11px', color: labelClr, marginBottom: '6px', letterSpacing: '0.05em' }}>出生时间（北京时间）</label>
+        <label style={{ display: 'block', fontSize: '11px', color: labelClr, marginBottom: '6px', letterSpacing: '0.05em' }}>
+          {tzOffsetMin !== DEFAULT_UTC_OFFSET_MINUTES
+            ? `出生时间（当地时间 ${formatUtcOffsetLabel(tzOffsetMin)}）`
+            : '出生时间（北京时间）'}
+        </label>
         <div style={{ borderRadius: '14px', padding: '12px', background: panelBg, border: `1px solid ${panelBorder}`, opacity: form.unknownTime ? 0.45 : 1, pointerEvents: form.unknownTime ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <select
