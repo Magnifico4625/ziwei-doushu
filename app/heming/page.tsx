@@ -3,6 +3,7 @@ import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import BirthForm, { type BirthFormState } from '@/components/BirthForm';
 import { formToBirthInfo } from '@/lib/ziwei/share';
+import { isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { generateChart as buildChart } from '@/lib/ziwei/algorithm';
 import type { BirthInfo, ZiweiChart } from '@/lib/ziwei/types';
 import { useTheme } from '@/components/ThemeProvider';
@@ -79,15 +80,24 @@ export default function HemingPage() {
     }
   }, []);
 
-  // 表单是否填齐
+  const dateInvalid = (f: BirthFormState | null): boolean => {
+    if (!f || !f.year || !f.month || !f.day) return false;
+    return !isValidGregorianDate(parseInt(f.year, 10), parseInt(f.month, 10), parseInt(f.day, 10));
+  };
+
+  // 表单是否填齐。不存在的公历日期（2 月 30 日、平年 2 月 29 日）不算填齐。
   const isFormReady = (f: BirthFormState | null): boolean =>
-    !!(f && f.year && f.month && f.day && f.gender && (f.unknownTime || (f.clockHour !== '' && f.clockMinute !== '')));
+    !!(f && f.year && f.month && f.day && f.gender
+      && (f.unknownTime || (f.clockHour !== '' && f.clockMinute !== ''))
+      && isValidGregorianDate(parseInt(f.year, 10), parseInt(f.month, 10), parseInt(f.day, 10)));
 
   // ─── 统一入口：起盘 + 合盘分析 ─────────────────────────────
   const runAnalysis = useCallback(async (q?: string) => {
     setFormError(null);
     if (!isFormReady(formA) || !isFormReady(formB)) {
-      setFormError('请先填写双方完整出生信息');
+      setFormError(dateInvalid(formA) || dateInvalid(formB)
+        ? '公历日期不存在（例如 2 月 30 日，或平年 2 月 29 日），请修改后再起盘'
+        : '请先填写双方完整出生信息');
       return;
     }
     setAnalyzing(true);

@@ -91,11 +91,17 @@ Download from [Releases → v4.0-13d](https://github.com/Renhuai123/ziwei-doushu
 
 Download from [Releases](https://github.com/Renhuai123/ziwei-doushu/releases/tag/v3.0-samples) (3 parts, 5.5 GB in total). Each sample is generated from `birthInfo`:
 
-- `year` / `month` / `day`: **Gregorian** date, 1924–1983 (one full 60-year cycle), days 1–30 of every month
+- `year` / `month` / `day`: **Gregorian** date, 1924–1983 (one full 60-year cycle). The published archive used days 1–30 of every month; nonexistent Gregorian dates are rejected by the engine and removed by the cleaner below
 - `hour`: **hour branch index 0–11** (子 = 0 … 亥 = 11), *not* a clock hour; the `hHH` part of each file name is the same index
 - `gender`: `male` / `female`; `longitude` is fixed at 120 (no local true-solar-time correction)
 
-**Known issue:** about 2,520 samples (0.49%) carry dates that do not exist: Feb 30, and Feb 29 in non-leap years. The engine silently rolled them over to Mar 1–2, so their content duplicates the Mar 1–2 samples. Filter out `month = 2 && day = 30`, and `month = 2 && day = 29` in non-leap years. From 2026-10-03 the engine rejects non-existent dates.
+**Fixed: nonexistent Gregorian dates are rejected and can be stripped from the sample set.** The published archive was generated with days 1–30 of every month (518,400 rows). Feb 30 (60 years) and Feb 29 in non-leap years (45 years) do not exist: 105 dates × 12 double-hours × 2 genders = **2,520** rows (0.49%). The old engine passed them to iztro, which did not throw; lunar conversion landed on the next real day, so a non-leap Feb 29 duplicated Mar 1, a non-leap Feb 30 duplicated Mar 2, and a leap-year Feb 30 duplicated Mar 1.
+
+- `generateChart` checks the Gregorian calendar before iztro. Feb 29 of 1900 and 2023 is rejected; Feb 29 of 2000 and 2024 is kept.
+- The birth form and `formToBirthInfo` check first. The late-zi “add one day” rule runs only for a date that already exists.
+- The archive is about 33 GB and is not in this repo. `npx tsx scripts/dataset/clean-v3-samples.ts` reprints the grid audit: **518,400 → remove 2,520 → 515,880**. With `--input` and `--output` it drops records whose declared Gregorian date does not exist. Real Mar 1 and Mar 2 rows are kept, once each.
+
+Lunar dates are a separate calendar. A lunar month may have 30 days, and leap lunar months are valid. The cleaner reads only the Gregorian `birthInfo` (or the Gregorian date in the filename when `birthInfo` is absent). It does not drop a row because of lunar day 30 or a leap month.
 
 ## Ni Haixia's original words (*Tian Ji*, Zi Wei part)
 

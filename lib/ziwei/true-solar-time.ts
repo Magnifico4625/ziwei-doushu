@@ -7,6 +7,9 @@
  *
  * 参考：https://gml.noaa.gov/grad/solcalc/solareqns.PDF
  */
+import { isLeapGregorianYear, isValidGregorianDate } from './gregorian-date';
+
+export { isValidGregorianDate };
 
 export interface GregorianDate {
   year: number;
@@ -42,12 +45,6 @@ const MINUTES_PER_DAY = 1440;
 const SECONDS_PER_DAY = 86400;
 const mod = (value: number, base: number) => ((value % base) + base) % base;
 
-export function isValidGregorianDate(year: number, month: number, day: number): boolean {
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
 export function shiftGregorianDate(date: GregorianDate, dayOffset: number): GregorianDate {
   const shifted = new Date(Date.UTC(date.year, date.month - 1, date.day + dayOffset));
   return {
@@ -59,10 +56,6 @@ export function shiftGregorianDate(date: GregorianDate, dayOffset: number): Greg
 
 export function sameGregorianDate(a: GregorianDate, b: GregorianDate): boolean {
   return a.year === b.year && a.month === b.month && a.day === b.day;
-}
-
-function isLeapYear(year: number): boolean {
-  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
 }
 
 function dayOfYear(year: number, month: number, day: number): number {
@@ -78,7 +71,7 @@ export function equationOfTimeMinutes(
   clockMinute = 0,
 ): number {
   if (!isValidGregorianDate(year, month, day)) return 0;
-  const daysInYear = isLeapYear(year) ? 366 : 365;
+  const daysInYear = isLeapGregorianYear(year) ? 366 : 365;
   const fractionalHour = clockHour + clockMinute / 60;
   const gamma = (2 * Math.PI / daysInYear)
     * (dayOfYear(year, month, day) - 1 + (fractionalHour - 12) / 24);
