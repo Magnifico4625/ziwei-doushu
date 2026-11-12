@@ -6,6 +6,7 @@ import { BRANCHES, STEMS } from '@/lib/ziwei/constants';
 import PalaceCell from './PalaceCell';
 import TimeNav, { type TimeView, getYearStemIndex, buildSiHuaOverlay } from './TimeNav';
 import { lateZiNoteForChart } from '@/lib/ziwei/share';
+import LateZiNoteText from './LateZiNoteText';
 
 interface ChartBoardProps {
   chart: ZiweiChart;
@@ -90,7 +91,7 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
   const sanFangSet = sanFangBranches ? new Set(sanFangBranches) : null;
 
   return (
-    <div className="w-full select-none">
+    <div className="chart-board w-full select-none">
       {/* 时间导航轴 */}
       <TimeNav
         chart={chart}
@@ -114,163 +115,164 @@ export default function ChartBoard({ chart, onStarSelect, onPalaceSelect, onSiHu
         </h2>
         {lateZiNote && (
           <p className="text-[11px] leading-relaxed mt-2 px-4" style={{ color: 'var(--t-gold)' }}>
-            {lateZiNote}
+            <LateZiNoteText note={lateZiNote} />
           </p>
         )}
       </motion.div>
 
-      {/* 4x4 命盘网格（含 SVG 叠加层） */}
-      <div
-        className="grid rounded-xl overflow-hidden relative"
-        style={{
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          gridTemplateRows: 'repeat(4, auto)',
-          gap: '1px',
-          background: 'var(--t-border)',
-          border: '1px solid var(--t-border)',
-          boxShadow: '0 4px 32px rgba(0,0,0,0.15)',
-        }}
-      >
-        {ANIMATION_ORDER.map((branch, i) => {
-          const [row, col] = BRANCH_GRID_POS[branch];
-          const palace = palaceMap[branch];
-          if (!palace) return null;
-          return (
-            <div key={branch} style={{ gridRow: row, gridColumn: col, background: 'var(--t-bg)' }}>
-              <PalaceCell
-                palace={palace}
-                onClick={() => handlePalaceClick(branch)}
-                onStarClick={(star) => onStarSelect?.(star, palace)}
-                isSelected={selectedBranch === branch}
-                isSanFang={!!(sanFangSet?.has(branch) && selectedBranch !== branch)}
-                delay={i * 0.04}
-                overlayStarSiHua={Object.keys(overlayData).length > 0 ? overlayData : undefined}
-                overlayLabel={overlayLabel}
-                onSiHuaClick={(starName, siHua) => onSiHuaClick?.(starName, siHua, timeView)}
-              />
-            </div>
-          );
-        })}
-
-        {/* 中央信息区 */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.5 }}
-          className="flex flex-col items-center justify-center p-4 gap-3"
-          style={{ gridRow: '2 / 4', gridColumn: '2 / 4', background: 'var(--t-bg)' }}
+      {/* 4x4 命盘网格（含 SVG 叠加层）。窄屏只允许盘内横滑。 */}
+      <div className="chart-board-scroll">
+        <div
+          className="chart-board-grid grid rounded-xl overflow-hidden relative"
+          style={{
+            gridTemplateRows: 'repeat(4, auto)',
+            gap: '1px',
+            background: 'var(--t-border)',
+            border: '1px solid var(--t-border)',
+            boxShadow: '0 4px 32px rgba(0,0,0,0.15)',
+          }}
         >
-          <div className="text-5xl select-none leading-none" style={{ color: 'var(--t-gold)', opacity: 0.12, filter: 'drop-shadow(0 0 12px rgba(180,120,30,0.15))' }}>
-            ☯
-          </div>
-
-          <div className="text-center space-y-1">
-            <div className="text-[9px] tracking-[0.3em] font-medium" style={{ color: 'var(--t-gold)' }}>紫微斗数</div>
-            <div className="text-[10px] space-y-0.5" style={{ color: 'var(--t-faint)' }}>
-              <div>命宫 <span style={{ color: 'var(--t-gold)', opacity: 0.7 }}>{BRANCHES[chart.mingGongBranch]}</span></div>
-              <div>身宫 <span className="text-sky-500/70">{BRANCHES[chart.shenGongBranch]}</span></div>
-              <div className="text-[9px]" style={{ color: 'var(--t-gold)', opacity: 0.75 }}>{chart.wuxingJuName}</div>
-            </div>
-          </div>
-
-          {chart.currentDaXianIndex >= 0 && (() => {
-            const dx = chart.daXians[chart.currentDaXianIndex];
+          {ANIMATION_ORDER.map((branch, i) => {
+            const [row, col] = BRANCH_GRID_POS[branch];
+            const palace = palaceMap[branch];
+            if (!palace) return null;
             return (
-              <div className="border border-purple-500/30 rounded-lg px-3 py-1.5 text-center"
-                style={{ background: 'rgba(147,51,234,0.06)' }}>
-                <div className="text-[8px] text-purple-500/80 mb-0.5 tracking-wider">当前大限</div>
-                <div className="text-[12px] text-purple-400 font-medium tabular-nums">{dx.startAge}–{dx.endAge}岁</div>
-                <div className="text-[9px] text-purple-500/60">{dx.palaceName}</div>
+              <div key={branch} className="min-w-0" style={{ gridRow: row, gridColumn: col, background: 'var(--t-bg)' }}>
+                <PalaceCell
+                  palace={palace}
+                  onClick={() => handlePalaceClick(branch)}
+                  onStarClick={(star) => onStarSelect?.(star, palace)}
+                  isSelected={selectedBranch === branch}
+                  isSanFang={!!(sanFangSet?.has(branch) && selectedBranch !== branch)}
+                  delay={i * 0.04}
+                  overlayStarSiHua={Object.keys(overlayData).length > 0 ? overlayData : undefined}
+                  overlayLabel={overlayLabel}
+                  onSiHuaClick={(starName, siHua) => onSiHuaClick?.(starName, siHua, timeView)}
+                />
               </div>
             );
-          })()}
+          })}
 
-          <div className="text-[8px] text-center leading-relaxed font-mono" style={{ color: 'var(--t-faint)', opacity: 0.75 }}>
-            {chart.lunarInfo.lunarYear}·{chart.lunarInfo.isLeapMonth ? '闰' : ''}
-            {chart.lunarInfo.lunarMonth}·{chart.lunarInfo.lunarDay}
-          </div>
-          {lateZiNote && (
-            <div className="text-[8px] text-center leading-relaxed px-2" style={{ color: 'var(--t-gold)', opacity: 0.9 }}>
-              {lateZiNote}
+          {/* 中央信息区 */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.5 }}
+            className="palace-center-tile flex flex-col items-center justify-center p-4 gap-3 min-w-0"
+            style={{ gridRow: '2 / 4', gridColumn: '2 / 4', background: 'var(--t-bg)' }}
+          >
+            <div className="text-5xl select-none leading-none" style={{ color: 'var(--t-gold)', opacity: 0.12, filter: 'drop-shadow(0 0 12px rgba(180,120,30,0.15))' }}>
+              ☯
             </div>
-          )}
-        </motion.div>
 
-        {/* ── 三方四正 SVG 连线（绝对定位在 grid 内部，受 overflow:hidden 裁切） ── */}
-        <AnimatePresence>
-          {sanFangBranches !== null && (
-            <motion.div
-              key={`sf-${selectedBranch}`}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.3 }}
-              className="pointer-events-none"
-              style={{
-                position: 'absolute',
-                inset: 0,
-                zIndex: 20,
-              }}
-            >
-              <svg
-                width="100%"
-                height="100%"
-                xmlns="http://www.w3.org/2000/svg"
-                style={{ display: 'block' }}
+            <div className="text-center space-y-1">
+              <div className="text-[9px] tracking-[0.3em] font-medium" style={{ color: 'var(--t-gold)' }}>紫微斗数</div>
+              <div className="text-[10px] space-y-0.5" style={{ color: 'var(--t-faint)' }}>
+                <div>命宫 <span style={{ color: 'var(--t-gold)', opacity: 0.7 }}>{BRANCHES[chart.mingGongBranch]}</span></div>
+                <div>身宫 <span className="text-sky-500/70">{BRANCHES[chart.shenGongBranch]}</span></div>
+                <div className="text-[9px]" style={{ color: 'var(--t-gold)', opacity: 0.75 }}>{chart.wuxingJuName}</div>
+              </div>
+            </div>
+
+            {chart.currentDaXianIndex >= 0 && (() => {
+              const dx = chart.daXians[chart.currentDaXianIndex];
+              return (
+                <div className="border border-purple-500/30 rounded-lg px-3 py-1.5 text-center"
+                  style={{ background: 'rgba(147,51,234,0.06)' }}>
+                  <div className="text-[8px] text-purple-500/80 mb-0.5 tracking-wider">当前大限</div>
+                  <div className="text-[12px] text-purple-400 font-medium tabular-nums">{dx.startAge}–{dx.endAge}岁</div>
+                  <div className="text-[9px] text-purple-500/60">{dx.palaceName}</div>
+                </div>
+              );
+            })()}
+
+            <div className="text-[8px] text-center leading-relaxed font-mono" style={{ color: 'var(--t-faint)', opacity: 0.75 }}>
+              {chart.lunarInfo.lunarYear}·{chart.lunarInfo.isLeapMonth ? '闰' : ''}
+              {chart.lunarInfo.lunarMonth}·{chart.lunarInfo.lunarDay}
+            </div>
+            {lateZiNote && (
+              <div className="text-[8px] text-center leading-relaxed px-2" style={{ color: 'var(--t-gold)', opacity: 0.9 }}>
+                <LateZiNoteText note={lateZiNote} />
+              </div>
+            )}
+          </motion.div>
+
+          {/* ── 三方四正 SVG 连线（绝对定位在 grid 内部，受 overflow:hidden 裁切） ── */}
+          <AnimatePresence>
+            {sanFangBranches !== null && (
+              <motion.div
+                key={`sf-${selectedBranch}`}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3 }}
+                className="pointer-events-none"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 20,
+                }}
               >
-                {(() => {
-                  // 三角形（三方）+ 一条直线（对宫）
-                  const p0 = BRANCH_SVG_POS[sanFangBranches[0]]; // 本宫
-                  const p1 = BRANCH_SVG_POS[sanFangBranches[1]]; // 对宫
-                  const p2 = BRANCH_SVG_POS[sanFangBranches[2]]; // 三合1
-                  const p3 = BRANCH_SVG_POS[sanFangBranches[3]]; // 三合2
-                  const dash = "6,5";
-                  const stroke = "rgba(37,99,235,0.55)";
-                  const sw = "1.5";
-                  return (
-                    <>
-                      {/* 对宫直线：本宫 ↔ 对宫（穿过中心） */}
-                      <line
-                        x1={`${p0[0]}%`} y1={`${p0[1]}%`}
-                        x2={`${p1[0]}%`} y2={`${p1[1]}%`}
-                        stroke={stroke} strokeWidth={sw}
-                        strokeDasharray={dash} strokeLinecap="round"
-                      />
-                      {/* 三合三角形：本宫 → 三合1 → 三合2 → 本宫 */}
-                      <line
-                        x1={`${p0[0]}%`} y1={`${p0[1]}%`}
-                        x2={`${p2[0]}%`} y2={`${p2[1]}%`}
-                        stroke={stroke} strokeWidth={sw}
-                        strokeDasharray={dash} strokeLinecap="round"
-                      />
-                      <line
-                        x1={`${p2[0]}%`} y1={`${p2[1]}%`}
-                        x2={`${p3[0]}%`} y2={`${p3[1]}%`}
-                        stroke={stroke} strokeWidth={sw}
-                        strokeDasharray={dash} strokeLinecap="round"
-                      />
-                      <line
-                        x1={`${p3[0]}%`} y1={`${p3[1]}%`}
-                        x2={`${p0[0]}%`} y2={`${p0[1]}%`}
-                        stroke={stroke} strokeWidth={sw}
-                        strokeDasharray={dash} strokeLinecap="round"
-                      />
-                      {/* 四个宫位中心标记点 */}
-                      {[p0, p1, p2, p3].map((p, i) => (
-                        <circle
-                          key={i}
-                          cx={`${p[0]}%`} cy={`${p[1]}%`}
-                          r="3"
-                          fill={i === 0 ? 'rgba(37,99,235,0.8)' : 'rgba(37,99,235,0.45)'}
+                <svg
+                  width="100%"
+                  height="100%"
+                  xmlns="http://www.w3.org/2000/svg"
+                  style={{ display: 'block' }}
+                >
+                  {(() => {
+                    // 三角形（三方）+ 一条直线（对宫）
+                    const p0 = BRANCH_SVG_POS[sanFangBranches[0]]; // 本宫
+                    const p1 = BRANCH_SVG_POS[sanFangBranches[1]]; // 对宫
+                    const p2 = BRANCH_SVG_POS[sanFangBranches[2]]; // 三合1
+                    const p3 = BRANCH_SVG_POS[sanFangBranches[3]]; // 三合2
+                    const dash = "6,5";
+                    const stroke = "rgba(37,99,235,0.55)";
+                    const sw = "1.5";
+                    return (
+                      <>
+                        {/* 对宫直线：本宫 ↔ 对宫（穿过中心） */}
+                        <line
+                          x1={`${p0[0]}%`} y1={`${p0[1]}%`}
+                          x2={`${p1[0]}%`} y2={`${p1[1]}%`}
+                          stroke={stroke} strokeWidth={sw}
+                          strokeDasharray={dash} strokeLinecap="round"
                         />
-                      ))}
-                    </>
-                  );
-                })()}
-              </svg>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                        {/* 三合三角形：本宫 → 三合1 → 三合2 → 本宫 */}
+                        <line
+                          x1={`${p0[0]}%`} y1={`${p0[1]}%`}
+                          x2={`${p2[0]}%`} y2={`${p2[1]}%`}
+                          stroke={stroke} strokeWidth={sw}
+                          strokeDasharray={dash} strokeLinecap="round"
+                        />
+                        <line
+                          x1={`${p2[0]}%`} y1={`${p2[1]}%`}
+                          x2={`${p3[0]}%`} y2={`${p3[1]}%`}
+                          stroke={stroke} strokeWidth={sw}
+                          strokeDasharray={dash} strokeLinecap="round"
+                        />
+                        <line
+                          x1={`${p3[0]}%`} y1={`${p3[1]}%`}
+                          x2={`${p0[0]}%`} y2={`${p0[1]}%`}
+                          stroke={stroke} strokeWidth={sw}
+                          strokeDasharray={dash} strokeLinecap="round"
+                        />
+                        {/* 四个宫位中心标记点 */}
+                        {[p0, p1, p2, p3].map((p, i) => (
+                          <circle
+                            key={i}
+                            cx={`${p[0]}%`} cy={`${p[1]}%`}
+                            r="3"
+                            fill={i === 0 ? 'rgba(37,99,235,0.8)' : 'rgba(37,99,235,0.45)'}
+                          />
+                        ))}
+                      </>
+                    );
+                  })()}
+                </svg>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
       {/* 图例 */}

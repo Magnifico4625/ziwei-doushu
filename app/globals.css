@@ -315,6 +315,66 @@ body {
   background-image: linear-gradient(160deg, #6a4206 0%, #9a6a10 40%, #6a4206 70%, #885010 100%);
 }
 
+/* ─── /chart 结果页：容器查询，窄屏先叠命盘再叠解读 ───────── */
+.chart-result {
+  container: chart-result / inline-size;
+  max-inline-size: 1280px;
+  margin-inline: auto;
+  padding-block: 24px;
+  padding-inline: 16px;
+  min-inline-size: 0;
+  overflow-x: clip;
+}
+
+.chart-result-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  margin-block-start: 16px;
+  align-items: start;
+}
+
+.chart-result-columns > * {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+/* 内容区够放下命盘 + 380px 侧栏时才并排。1024/1280 与原先两列一致。 */
+@container chart-result (inline-size >= 840px) {
+  .chart-result-columns {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 380px);
+  }
+}
+
+.chart-board {
+  container: chart-board / inline-size;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.chart-board-scroll {
+  max-inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.chart-board-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+
+/* 盘面比约 320px 还窄时，只在盘内横滑，不把整页撑出横向滚动。 */
+@container chart-board (inline-size < 22rem) {
+  .chart-board-scroll {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+  .chart-board-grid {
+    min-inline-size: 20rem;
+  }
+}
+
 /* ─── 命盘工作台响应式 ─────────────────────────────────── */
 .chart-page-root {
   min-height: 100vh;
@@ -408,11 +468,14 @@ body {
   .palace-cell {
     min-height: 74px !important;
     padding: 6px 5px 5px !important;
+    min-inline-size: 0;
   }
   .palace-cell-name { padding-right: 22px !important; }
   .palace-center-tile {
     padding: 10px 6px !important;
     gap: 6px !important;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
   }
 }
 
