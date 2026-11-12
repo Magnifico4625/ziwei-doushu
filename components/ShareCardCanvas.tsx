@@ -10,6 +10,7 @@
 import type { ZiweiChart } from '@/lib/ziwei/types';
 import { SITE_HOST } from '@/lib/site';
 import { lateZiNoteForChart } from '@/lib/ziwei/share';
+import LateZiNoteText from './LateZiNoteText';
 
 const BRANCH_NAMES = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
 
@@ -106,8 +107,8 @@ export default function ShareCardCanvas({ chart, birth, highlight }: ShareCardPr
             {birth.city && <><span style={{ margin: '0 4px', color: '#b8922a' }}>·</span>{birth.city}</>}
           </div>
           {lateZiNote && (
-            <div style={{ fontSize: '8px', color: '#8b6a14', letterSpacing: '0.04em', marginTop: '2px', maxWidth: '280px', textAlign: 'right', lineHeight: 1.35 }}>
-              {lateZiNote}
+            <div style={{ fontSize: '8px', color: '#8b6a14', letterSpacing: '0.04em', marginTop: '2px', maxWidth: 'min(280px, 100%)', textAlign: 'right', lineHeight: 1.35, overflowWrap: 'break-word' }}>
+              <LateZiNoteText note={lateZiNote} />
             </div>
           )}
           <div style={{ fontSize: '8px', color: '#b8922a', letterSpacing: '0.08em', marginTop: '2px' }}>
