@@ -219,6 +219,17 @@ assert.deepEqual(namedInfo, formToBirthInfo(named));
 assert.equal(calcTrueSolarBranch(23, 30, 87.6, { year: 1990, month: 12, day: 31 }), 11, 'Urumqi 23:30 Beijing time is hai hour on the same solar day');
 assert.equal(isLateZiNextDay(namedInfo), false, 'Urumqi 23:30 does not advance to the next day');
 
+// 哈尔滨 (126.5°E)：1990-01-01 23:50 北京时间对应真太阳时约 1990-01-02 00:12（次日早子时），
+// 排盘日为 1990-01-02，但不应误标「晚子时：按次日排盘」。
+const harbinEarly = blankForm('1990', '1', '1', '23', '50');
+harbinEarly.province = '黑龙江省';
+harbinEarly.city = '哈尔滨';
+harbinEarly.longitude = 126.5;
+const harbinEarlyInfo = chartBirthInfo(harbinEarly);
+assert.deepEqual(ymdh(harbinEarlyInfo), { year: 1990, month: 1, day: 2, hour: 0 });
+assert.equal(isLateZiNextDay(harbinEarlyInfo), false, 'Harbin 1990-01-01 23:50 is early Zi on 1990-01-02');
+assert.equal(lateZiNoteForChart(harbinEarlyInfo, 'zh'), '');
+
 const unknown = blankForm('1990', '1', '31', '23', '30');
 unknown.unknownTime = true;
 assertSameChart(unknown, { year: 1990, month: 1, day: 31, hour: 0 }, 'unknown time does not apply the late-zi day shift');
