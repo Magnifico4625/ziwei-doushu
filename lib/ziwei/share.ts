@@ -67,31 +67,47 @@ export function resolveFormTimeZone(
   return undefined;
 }
 
+function parseFormDateTime(form: Partial<Pick<BirthFormState, 'year' | 'month' | 'day' | 'clockHour' | 'clockMinute'>>) {
+  return {
+    year: form.year ? parseInt(form.year, 10) || 0 : 0,
+    month: form.month ? parseInt(form.month, 10) || 0 : 0,
+    day: form.day ? parseInt(form.day, 10) || 0 : 0,
+    hour: form.clockHour !== undefined ? (parseInt(form.clockHour, 10) || 0) : 12,
+    minute: form.clockMinute !== undefined ? (parseInt(form.clockMinute, 10) || 0) : 0,
+  };
+}
+
+function isManualTimezoneOverride(
+  form: FormTimezoneFields,
+  tzId: string | undefined,
+  cityExpectedOffset: number | undefined,
+): boolean {
+  if (!isValidUtcOffsetMinutes(form.utcOffsetMinutes)) return false;
+  if (form.timeZone === '' || !tzId) return true;
+  if (form.timeZone === undefined && cityExpectedOffset !== undefined && form.utcOffsetMinutes !== cityExpectedOffset) {
+    return true;
+  }
+  return false;
+}
+
 /** 解析表单对应的实际 UTC 偏移分钟数：若存在 IANA 时区且未手动覆盖为其他时区，则按出生年月日时解析含夏令时在内的历史偏移。 */
 export function resolveFormUtcOffsetMinutes(form: FormTimezoneFields): number | undefined {
   const cityMeta = form.province && form.city ? findCityInfo(form.province, form.city) : undefined;
   const tzId = resolveFormTimeZone(form);
+  const { year, month, day, hour, minute } = parseFormDateTime(form);
 
-  if (isValidUtcOffsetMinutes(form.utcOffsetMinutes)) {
-    // 若用户显式选择/传入了与城市默认标准偏移不同的时区，或无 IANA 时区，则尊重显式值。
-    if (!tzId || form.utcOffsetMinutes !== cityMeta?.utcOffsetMinutes) {
-      return form.utcOffsetMinutes;
-    }
+  const dynamicOffset = tzId && isValidGregorianDate(year, month, day)
+    ? resolveTimeZoneOffsetMinutes(tzId, year, month, day, hour, minute)
+    : undefined;
+  const cityExpectedOffset = dynamicOffset ?? cityMeta?.utcOffsetMinutes;
+
+  if (isManualTimezoneOverride(form, tzId, cityExpectedOffset)) {
+    return form.utcOffsetMinutes;
   }
 
-  const y = form.year ? parseInt(form.year, 10) || 0 : 0;
-  const m = form.month ? parseInt(form.month, 10) || 0 : 0;
-  const d = form.day ? parseInt(form.day, 10) || 0 : 0;
-  const h = form.clockHour !== undefined ? (parseInt(form.clockHour, 10) || 0) : 12;
-  const mi = form.clockMinute !== undefined ? (parseInt(form.clockMinute, 10) || 0) : 0;
-
-  if (tzId && isValidGregorianDate(y, m, d)) {
-    const dynamicOffset = resolveTimeZoneOffsetMinutes(tzId, y, m, d, h, mi);
-    if (dynamicOffset !== undefined) return dynamicOffset;
-  }
-
-  if (isValidUtcOffsetMinutes(form.utcOffsetMinutes)) return form.utcOffsetMinutes;
-  return cityMeta?.utcOffsetMinutes;
+  if (dynamicOffset !== undefined) return dynamicOffset;
+  if (cityMeta?.utcOffsetMinutes !== undefined) return cityMeta.utcOffsetMinutes;
+  return isValidUtcOffsetMinutes(form.utcOffsetMinutes) ? form.utcOffsetMinutes : undefined;
 }
 
 /** 判断表单是否提供了需要做真太阳时校正的出生地经度/时区信息。 */
@@ -123,8 +139,10 @@ export function resolveFormTrueSolarTime(form: BirthFormState): TrueSolarTimeRes
   const utcOffsetMinutes = resolveFormUtcOffsetMinutes(form);
   const cityMeta = form.province && form.city ? findCityInfo(form.province, form.city) : undefined;
   const tzId = resolveFormTimeZone(form);
-  const manualOverride = isValidUtcOffsetMinutes(form.utcOffsetMinutes)
-    && (!tzId || form.utcOffsetMinutes !== cityMeta?.utcOffsetMinutes);
+  const cityExpectedOffset = tzId && isValidGregorianDate(year, month, day)
+    ? (resolveTimeZoneOffsetMinutes(tzId, year, month, day, clockHour, clockMinute) ?? cityMeta?.utcOffsetMinutes)
+    : cityMeta?.utcOffsetMinutes;
+  const manualOverride = isManualTimezoneOverride(form, tzId, cityExpectedOffset);
   const corrected = !form.unknownTime && hasFormLocationCorrection(form);
   const effectiveLongitude = corrected && isValidLongitude(form.longitude) ? form.longitude : undefined;
 
@@ -182,8 +200,10 @@ export function formToBirthInfo(
   const utcOffsetMinutes = resolveFormUtcOffsetMinutes(form);
   const cityMeta = form.province && form.city ? findCityInfo(form.province, form.city) : undefined;
   const tzId = resolveFormTimeZone(form);
-  const manualOverride = isValidUtcOffsetMinutes(form.utcOffsetMinutes)
-    && (!tzId || form.utcOffsetMinutes !== cityMeta?.utcOffsetMinutes);
+  const cityExpectedOffset = tzId && isValidGregorianDate(typedYear, typedMonth, typedDay)
+    ? (resolveTimeZoneOffsetMinutes(tzId, typedYear, typedMonth, typedDay, clockHour, clockMinute) ?? cityMeta?.utcOffsetMinutes)
+    : cityMeta?.utcOffsetMinutes;
+  const manualOverride = isManualTimezoneOverride(form, tzId, cityExpectedOffset);
   const hasLoc = hasFormLocationCorrection(form);
 
   const info: BirthInfo = {
@@ -429,8 +449,8 @@ export function searchParamsToForm(params: URLSearchParams): Partial<BirthFormSt
   if (utcOffsetMinutes !== undefined) {
     out.utcOffsetMinutes = utcOffsetMinutes;
   }
-  if (parsedTz === undefined && cityMeta?.timeZone) {
-    out.timeZone = cityMeta.timeZone;
+  if (cityMeta?.timeZone) {
+    out.timeZone = parsedTz === undefined || parsedTz === cityTz ? cityMeta.timeZone : '';
   }
   return out;
 }

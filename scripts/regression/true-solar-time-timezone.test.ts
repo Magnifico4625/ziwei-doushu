@@ -73,6 +73,11 @@ assert.equal(standardMeridianDegrees(330), 82.5);   // 印度 UTC+5:30
 assert.equal(standardMeridianDegrees(0), 0);        // 伦敦 UTC+0
 assert.equal(standardMeridianDegrees(-300), -75);   // 纽约 UTC-5
 assert.equal(standardMeridianDegrees(-480), -120);  // 洛杉矶 UTC-8
+assert.equal(standardMeridianDegrees(720), 180);    // 国际日期变更线西侧 UTC+12
+assert.equal(standardMeridianDegrees(-720), -180);  // 国际日期变更线东侧 UTC-12
+assert.equal(standardMeridianDegrees(765), -168.75);// 查塔姆群岛 UTC+12:45 → -168.75°W
+assert.equal(standardMeridianDegrees(780), -165);   // 萨摩亚 / 汤加 UTC+13 → -165°W
+assert.equal(standardMeridianDegrees(840), -150);   // 基里巴斯 UTC+14 → -150°W
 
 assert.equal(formatUtcOffsetLabel(480), 'UTC+8');
 assert.equal(formatUtcOffsetLabel(180), 'UTC+3');
@@ -443,6 +448,100 @@ assert.equal(formatUtcOffsetLabel(-300), 'UTC-5');
   const customInfo = formToBirthInfo(makeForm(customRestored));
   assert.equal(customInfo.utcOffsetMinutes, 330);
   assert.equal(customInfo.hour, calcTrueSolarBranch(14, 20, 77.2, { year: 1992, month: 8, day: 10, utcOffsetMinutes: 330 }));
+
+  // (i) 跨国际日期变更线时区（UTC+12:45 / +13 / +14）：标准经线归一化到 [-180, 180] 且经度差按短弧计算
+  // 基里巴斯·圣诞岛（157.4°W, UTC+14 = 840 分钟，标准经线 -150°W）：经度修正 (-157.4 - (-150)) * 4 = -29.6 分钟，不退前一天
+  const kiribatiCalcNoEot = calculateTrueSolarTime({
+    year: 2024,
+    month: 7,
+    day: 1,
+    clockHour: 12,
+    clockMinute: 0,
+    longitude: -157.4,
+    utcOffsetMinutes: 840,
+    includeEquationOfTime: false,
+  });
+  assert.equal(kiribatiCalcNoEot.standardMeridian, -150);
+  assert.ok(Math.abs(kiribatiCalcNoEot.longitudeCorrectionMinutes - (-29.6)) < 1e-9);
+  assert.equal(kiribatiCalcNoEot.dayOffset, 0);
+
+  const kiribatiForm = makeForm({
+    year: '2024',
+    month: '7',
+    day: '1',
+    clockHour: '12',
+    clockMinute: '0',
+    province: '',
+    city: '',
+    longitude: -157.4,
+    utcOffsetMinutes: 840,
+    timeZone: '',
+  });
+  const kiribatiInfo = formToBirthInfo(kiribatiForm);
+  assert.deepEqual(
+    { year: kiribatiInfo.year, month: kiribatiInfo.month, day: kiribatiInfo.day },
+    { year: 2024, month: 7, day: 1 },
+    'Kiribati UTC+14 must stay on 2024-07-01 instead of shifting back nearly 24 hours',
+  );
+
+  // 奥克兰夏季（174.8°E, UTC+13 = 780 分钟，标准经线 -165°W）：短弧差 -20.2°，修正 -80.8 分钟
+  const aucklandSummerCalc = calculateTrueSolarTime({
+    year: 2024,
+    month: 1,
+    day: 15,
+    clockHour: 12,
+    clockMinute: 0,
+    longitude: 174.8,
+    utcOffsetMinutes: 780,
+    includeEquationOfTime: false,
+  });
+  assert.equal(aucklandSummerCalc.standardMeridian, -165);
+  assert.ok(Math.abs(aucklandSummerCalc.longitudeCorrectionMinutes - (-80.8)) < 1e-9);
+  assert.equal(aucklandSummerCalc.dayOffset, 0);
+
+  // 手动选择 UTC+14（无城市）经分享链接往返，默认经度落在 [-180, 180]
+  const utc14ManualForm = makeForm({
+    year: '2024',
+    month: '7',
+    day: '1',
+    clockHour: '12',
+    clockMinute: '0',
+    province: '',
+    city: '',
+    longitude: standardMeridianDegrees(840),
+    utcOffsetMinutes: 840,
+    timeZone: '',
+  });
+  const utc14Params = formToSearchParams(utc14ManualForm);
+  const utc14Restored = searchParamsToForm(utc14Params);
+  assert.ok(utc14Restored);
+  assert.equal(utc14Restored.utcOffsetMinutes, 840);
+  assert.equal(utc14Restored.longitude, -150);
+
+  // (j) 分享链接打开具备 IANA 时区的海外城市（如夏季纽约 tz=-240）后保留自动时区，后续改回冬季会重新算出 UTC-5 (-300)
+  const nySummerParams = formToSearchParams(nySummerForm);
+  assert.equal(nySummerParams.get('tz'), '-240');
+  const nyRestored = searchParamsToForm(nySummerParams);
+  assert.ok(nyRestored);
+  assert.equal(nyRestored.utcOffsetMinutes, -240);
+  assert.equal(nyRestored.timeZone, 'America/New_York');
+  assert.equal(
+    resolveFormUtcOffsetMinutes({ ...makeForm(nyRestored), month: '1' }),
+    -300,
+    'Restored New York auto timezone must recalculate EST (-300) when month changes to January',
+  );
+  assert.equal(
+    resolveFormUtcOffsetMinutes({ ...makeForm(nyRestored), month: '1', utcOffsetMinutes: undefined }),
+    -300,
+  );
+
+  // 若分享链接中携带了与城市当日偏移不同的手动覆盖时区，则仍视为手动固定时区
+  const nyManualOverrideParams = new URLSearchParams('y=2024&m=7&d=1&h=1&mi=30&p=海外 / 国际&c=纽约&tz=330&g=m');
+  const nyManualRestored = searchParamsToForm(nyManualOverrideParams);
+  assert.ok(nyManualRestored);
+  assert.equal(nyManualRestored.utcOffsetMinutes, 330);
+  assert.equal(nyManualRestored.timeZone, '');
+  assert.equal(resolveFormUtcOffsetMinutes({ ...makeForm(nyManualRestored), month: '1' }), 330);
 }
 
 // ── 5. 中国大陆历史夏令时表单提示（1935–1991 年提示，不静默修改时间） ──

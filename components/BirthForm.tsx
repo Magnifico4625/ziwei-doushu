@@ -217,20 +217,30 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
 
   const handleSubtractDstHour = () => {
     const curH = parseInt(form.clockHour, 10) || 0;
+    const clearAutoOffset = selectedTzValue === '' ? { utcOffsetMinutes: undefined } : {};
     if (curH > 0) {
-      setForm({ ...form, clockHour: String(curH - 1) });
+      setForm({ ...form, ...clearAutoOffset, clockHour: String(curH - 1) });
       return;
     }
     if (isValidDate(y, m, d)) {
       const prev = shiftGregorianDate({ year: y, month: m, day: d }, -1);
       setForm({
         ...form,
+        ...clearAutoOffset,
         year: String(prev.year),
         month: String(prev.month),
         day: String(prev.day),
         clockHour: '23',
       });
     }
+  };
+
+  const updateDateTimeField = (patch: Partial<Pick<BirthFormState, 'year' | 'month' | 'day' | 'clockHour' | 'clockMinute'>>) => {
+    setForm(prev => ({
+      ...prev,
+      ...patch,
+      ...(selectedTzValue === '' ? { utcOffsetMinutes: undefined } : {}),
+    }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -274,6 +284,12 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   } as React.CSSProperties;
 
   const errorInputStyle = { ...inputStyle, borderColor: errorClr };
+  const compactLocationInputStyle = {
+    ...inputStyle,
+    padding: '10px 10px',
+    fontSize: '12px',
+    minWidth: 0,
+  } as React.CSSProperties;
 
   function FieldError({ msg }: { msg: string }) {
     return (
@@ -341,7 +357,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div>
             <select
               value={form.year}
-              onChange={e => { setForm({ ...form, year: e.target.value }); setTouched(t => ({ ...t, year: true })); }}
+              onChange={e => { updateDateTimeField({ year: e.target.value }); setTouched(t => ({ ...t, year: true })); }}
               style={showErr('year') && errors.year ? errorInputStyle : inputStyle}
               required
             >
@@ -355,7 +371,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div>
             <select
               value={form.month}
-              onChange={e => { setForm({ ...form, month: e.target.value }); setTouched(t => ({ ...t, month: true })); }}
+              onChange={e => { updateDateTimeField({ month: e.target.value }); setTouched(t => ({ ...t, month: true })); }}
               style={showErr('month') && errors.month ? errorInputStyle : inputStyle}
               required
             >
@@ -369,7 +385,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div>
             <select
               value={form.day}
-              onChange={e => { setForm({ ...form, day: e.target.value }); setTouched(t => ({ ...t, day: true })); }}
+              onChange={e => { updateDateTimeField({ day: e.target.value }); setTouched(t => ({ ...t, day: true })); }}
               style={showErr('day') && errors.day ? errorInputStyle : inputStyle}
               required
             >
@@ -413,17 +429,17 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             ))}
           </select>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', gap: '8px', marginTop: '8px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)', gap: '8px', marginTop: '8px' }}>
           <select
             aria-label="出生时区"
             value={selectedTzValue}
             onChange={e => handleTimezoneChange(e.target.value)}
-            style={inputStyle}
+            style={compactLocationInputStyle}
             onFocus={e => { e.target.style.borderColor = focusBorder; }}
             onBlur={e => { e.target.style.borderColor = inputBorder; }}
           >
             <option value="">
-              自动时区（{formatUtcOffsetLabel(tzOffsetMin)}）
+              自动 ({formatUtcOffsetLabel(tzOffsetMin)})
             </option>
             {selectedTzValue !== '' && !UTC_OFFSET_OPTIONS.includes(Number(selectedTzValue)) && (
               <option value={selectedTzValue}>
@@ -450,7 +466,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               }
             }}
             placeholder="经度（东正西负）"
-            style={inputStyle}
+            style={compactLocationInputStyle}
             onFocus={e => { e.target.style.borderColor = focusBorder; }}
             onBlur={e => { e.target.style.borderColor = inputBorder; }}
           />
@@ -491,7 +507,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <select
               value={form.clockHour}
-              onChange={e => setForm({ ...form, clockHour: e.target.value })}
+              onChange={e => updateDateTimeField({ clockHour: e.target.value })}
               style={inputStyle}
             >
               {Array.from({ length: 24 }, (_, i) => i).map(h => (
@@ -500,7 +516,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             </select>
             <select
               value={form.clockMinute}
-              onChange={e => setForm({ ...form, clockMinute: e.target.value })}
+              onChange={e => updateDateTimeField({ clockMinute: e.target.value })}
               style={inputStyle}
             >
               {Array.from({ length: 60 }, (_, i) => i).map(min => (

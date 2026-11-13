@@ -193,10 +193,11 @@ function inferOverseasTimeZone(longitude?: number, utcOffsetMinutes?: number): s
   return hit?.timeZone;
 }
 
-/** 由 UTC 偏移分钟数换算该时区的标准经线度数（东经为正，西经为负；1° = 4 分钟）。 */
+/** 由 UTC 偏移分钟数换算该时区的标准经线度数（东经为正，西经为负；1° = 4 分钟，归一化至 [-180°, 180°]）。 */
 export function standardMeridianDegrees(utcOffsetMinutes = DEFAULT_UTC_OFFSET_MINUTES): number {
   const offset = Number.isFinite(utcOffsetMinutes) ? utcOffsetMinutes : DEFAULT_UTC_OFFSET_MINUTES;
-  return offset / 4;
+  const raw = offset / 4;
+  return raw > 180 ? raw - 360 : raw < -180 ? raw + 360 : raw;
 }
 
 /** 格式化 UTC 偏移标签，如 `UTC+8`、`UTC+3`、`UTC+5:30`、`UTC-5`。 */
@@ -271,7 +272,9 @@ export function calculateTrueSolarTime(input: TrueSolarTimeInput): TrueSolarTime
       : DEFAULT_UTC_OFFSET_MINUTES;
   const standardMeridian = standardMeridianDegrees(utcOffsetMinutes);
   const corrected = isValidLongitude(input.longitude);
-  const longitudeCorrectionMinutes = corrected ? (input.longitude! - standardMeridian) * 4 : 0;
+  const rawLonDelta = corrected ? input.longitude! - standardMeridian : 0;
+  const lonDelta = rawLonDelta > 180 ? rawLonDelta - 360 : rawLonDelta < -180 ? rawLonDelta + 360 : rawLonDelta;
+  const longitudeCorrectionMinutes = corrected ? lonDelta * 4 : 0;
   const eot = corrected && dateValid && input.includeEquationOfTime !== false
     ? equationOfTimeMinutes(input.year, input.month, input.day, input.clockHour, input.clockMinute)
     : 0;
