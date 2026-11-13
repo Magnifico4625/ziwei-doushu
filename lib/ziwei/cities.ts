@@ -1,7 +1,10 @@
+import { resolveTimeZoneOffsetMinutes } from './true-solar-time';
+
 export interface CityInfo {
   name: string;
   longitude: number; // degrees East (negative for West)
-  utcOffsetMinutes?: number; // standard timezone offset in minutes (default 480 = UTC+8)
+  utcOffsetMinutes?: number; // standard (winter) timezone offset in minutes (default 480 = UTC+8)
+  timeZone?: string; // IANA time zone identifier (e.g. 'America/New_York', 'Europe/Moscow')
 }
 
 export interface ProvinceInfo {
@@ -700,31 +703,33 @@ export const PROVINCES: ProvinceInfo[] = [
     ],
   },
 
-  // ─── 海外 / 国际（附带标准时区偏移 utcOffsetMinutes） ─────────────────────────
+  // ─── 海外 / 国际（附带标准时区偏移与 IANA 时区，自动处理历史夏令时） ──────────
   {
     name: '海外 / 国际',
     cities: [
-      { name: '莫斯科', longitude: 37.6, utcOffsetMinutes: 180 },
-      { name: '圣彼得堡', longitude: 30.3, utcOffsetMinutes: 180 },
-      { name: '叶卡捷琳堡', longitude: 60.6, utcOffsetMinutes: 300 },
-      { name: '新西伯利亚', longitude: 82.9, utcOffsetMinutes: 420 },
-      { name: '符拉迪沃斯托克', longitude: 131.9, utcOffsetMinutes: 600 },
-      { name: '阿拉木图', longitude: 76.9, utcOffsetMinutes: 300 },
-      { name: '明斯克', longitude: 27.6, utcOffsetMinutes: 180 },
-      { name: '东京', longitude: 139.7, utcOffsetMinutes: 540 },
-      { name: '首尔', longitude: 127.0, utcOffsetMinutes: 540 },
-      { name: '新加坡', longitude: 103.8, utcOffsetMinutes: 480 },
-      { name: '吉隆坡', longitude: 101.7, utcOffsetMinutes: 480 },
-      { name: '曼谷', longitude: 100.5, utcOffsetMinutes: 420 },
-      { name: '伦敦', longitude: -0.1, utcOffsetMinutes: 0 },
-      { name: '巴黎', longitude: 2.3, utcOffsetMinutes: 60 },
-      { name: '柏林', longitude: 13.4, utcOffsetMinutes: 60 },
-      { name: '纽约', longitude: -74.0, utcOffsetMinutes: -300 },
-      { name: '洛杉矶', longitude: -118.2, utcOffsetMinutes: -480 },
-      { name: '多伦多', longitude: -79.4, utcOffsetMinutes: -300 },
-      { name: '温哥华', longitude: -123.1, utcOffsetMinutes: -480 },
-      { name: '悉尼', longitude: 151.2, utcOffsetMinutes: 600 },
-      { name: '墨尔本', longitude: 145.0, utcOffsetMinutes: 600 },
+      { name: '莫斯科', longitude: 37.6, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '圣彼得堡', longitude: 30.3, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '叶卡捷琳堡', longitude: 60.6, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
+      { name: '新西伯利亚', longitude: 82.9, utcOffsetMinutes: 420, timeZone: 'Asia/Novosibirsk' },
+      { name: '符拉迪沃斯托克', longitude: 131.9, utcOffsetMinutes: 600, timeZone: 'Asia/Vladivostok' },
+      { name: '阿拉木图', longitude: 76.9, utcOffsetMinutes: 300, timeZone: 'Asia/Almaty' },
+      { name: '明斯克', longitude: 27.6, utcOffsetMinutes: 180, timeZone: 'Europe/Minsk' },
+      { name: '东京', longitude: 139.7, utcOffsetMinutes: 540, timeZone: 'Asia/Tokyo' },
+      { name: '首尔', longitude: 127.0, utcOffsetMinutes: 540, timeZone: 'Asia/Seoul' },
+      { name: '新加坡', longitude: 103.8, utcOffsetMinutes: 480, timeZone: 'Asia/Singapore' },
+      { name: '吉隆坡', longitude: 101.7, utcOffsetMinutes: 480, timeZone: 'Asia/Kuala_Lumpur' },
+      { name: '曼谷', longitude: 100.5, utcOffsetMinutes: 420, timeZone: 'Asia/Bangkok' },
+      { name: '新德里', longitude: 77.2, utcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
+      { name: '孟买', longitude: 72.8, utcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
+      { name: '伦敦', longitude: -0.1, utcOffsetMinutes: 0, timeZone: 'Europe/London' },
+      { name: '巴黎', longitude: 2.3, utcOffsetMinutes: 60, timeZone: 'Europe/Paris' },
+      { name: '柏林', longitude: 13.4, utcOffsetMinutes: 60, timeZone: 'Europe/Berlin' },
+      { name: '纽约', longitude: -74.0, utcOffsetMinutes: -300, timeZone: 'America/New_York' },
+      { name: '洛杉矶', longitude: -118.2, utcOffsetMinutes: -480, timeZone: 'America/Los_Angeles' },
+      { name: '多伦多', longitude: -79.4, utcOffsetMinutes: -300, timeZone: 'America/Toronto' },
+      { name: '温哥华', longitude: -123.1, utcOffsetMinutes: -480, timeZone: 'America/Vancouver' },
+      { name: '悉尼', longitude: 151.2, utcOffsetMinutes: 600, timeZone: 'Australia/Sydney' },
+      { name: '墨尔本', longitude: 145.0, utcOffsetMinutes: 600, timeZone: 'Australia/Melbourne' },
     ],
   },
 ];
@@ -733,4 +738,20 @@ export function findCityInfo(provinceName: string, cityName: string): CityInfo |
   if (!provinceName || !cityName) return undefined;
   const prov = PROVINCES.find((p) => p.name === provinceName);
   return prov?.cities.find((c) => c.name === cityName);
+}
+
+/** 按城市配置的 IANA 时区解析指定出生年月日时的实际 UTC 偏移（含夏令时/历史时区变化）；未配置或日期无效时回退静态偏移。 */
+export function resolveCityUtcOffsetMinutes(
+  city: CityInfo,
+  year?: number,
+  month?: number,
+  day?: number,
+  clockHour = 12,
+  clockMinute = 0,
+): number | undefined {
+  if (city.timeZone && year && month && day) {
+    const resolved = resolveTimeZoneOffsetMinutes(city.timeZone, year, month, day, clockHour, clockMinute);
+    if (resolved !== undefined) return resolved;
+  }
+  return city.utcOffsetMinutes;
 }

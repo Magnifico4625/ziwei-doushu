@@ -45,10 +45,10 @@ This repo is an open snapshot of the engine behind [metisziwei.com](https://meti
 
 | Feature | Notes |
 |---|---|
-| True solar time | Longitude offset plus the equation of time, so births near hour boundaries are not off by one double-hour |
-| China DST | 1986–1991 daylight-saving periods are removed automatically |
+| True solar time | Longitude offset plus the equation of time, supporting international cities with historical IANA time zones (DST-aware) and manual UTC offsets (`UTC-12` to `UTC+14`, including `UTC+5:30`) |
+| China DST | Detects China DST periods from the convention table in `dst-cn.ts` (1986–1991 national DST and the simplified pre-1979 national table) and shows a warning in the birth form (with a one-click −1 hour adjustment) instead of silently altering entered clock times |
 | Leap months | Four configurable conventions (previous month / next month / split by day / same month) |
-| Late Zi hour | 23:00–23:59 is charted on the next day, 00:00–00:59 on the same day; switchable |
+| Late Zi hour | Determined by true solar time when a location/timezone is set (23:00–23:59 charts on the next day; 00:00–00:59 is early Zi on that solar day), or by clock hour when no location is given; switchable |
 | Star brightness | 7 levels (庙 旺 得 利 平 不 陷); brightness tables of different schools are switchable, not hard-coded |
 | Four Transformations | Natal, decade (大限) and annual (流年) transformations, plus flying-star self-transformations |
 | Twelve spirits | Natal layer by year branch, annual layer by the annual branch |

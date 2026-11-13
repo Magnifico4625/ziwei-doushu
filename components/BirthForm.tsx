@@ -5,14 +5,17 @@ import type { BirthInfo } from '@/lib/ziwei/types';
 import { daysInGregorianMonth, isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { SHICHEN } from '@/lib/ziwei/constants';
 import {
+  chinaDstNoteForForm,
   formToBirthInfo,
   lateZiNoteForChart,
+  resolveFormTimeZone,
   resolveFormTrueSolarTime,
   resolveFormUtcOffsetMinutes,
 } from '@/lib/ziwei/share';
 import {
   DEFAULT_UTC_OFFSET_MINUTES,
   formatUtcOffsetLabel,
+  shiftGregorianDate,
   standardMeridianDegrees,
 } from '@/lib/ziwei/true-solar-time';
 import { useTheme } from '@/components/ThemeProvider';
@@ -30,6 +33,7 @@ export interface BirthFormState {
   city: string;
   longitude: number;
   utcOffsetMinutes?: number;
+  timeZone?: string;
   gender: 'male' | 'female';
 }
 
@@ -43,6 +47,12 @@ interface BirthFormProps {
 }
 
 const SHICHEN_NAMES = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
+
+const UTC_OFFSET_OPTIONS: readonly number[] = [
+  -720, -660, -600, -570, -540, -480, -420, -360, -300, -270, -240, -210, -180, -120, -60,
+  0,
+  60, 120, 180, 210, 240, 270, 300, 330, 345, 360, 390, 420, 480, 525, 540, 570, 600, 630, 660, 720, 765, 780, 840,
+];
 
 /** 检查公历日期是否真实存在（不用 Date 顺延结果）。 */
 function isValidDate(y: number, m: number, d: number): boolean {
@@ -73,6 +83,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     city: initialData?.city ?? '',
     longitude: initialData?.longitude ?? 120,
     utcOffsetMinutes: initialData?.utcOffsetMinutes,
+    timeZone: initialData?.timeZone,
     gender: initialData?.gender ?? 'male',
   });
 
@@ -96,7 +107,10 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   }, [form]);
 
   const branch = solarPreview ? solarPreview.branch : 0;
-  const tzOffsetMin = resolveFormUtcOffsetMinutes(form) ?? DEFAULT_UTC_OFFSET_MINUTES;
+  const resolvedTzId = resolveFormTimeZone(form);
+  const tzOffsetMin = solarPreview
+    ? solarPreview.utcOffsetMinutes
+    : (resolveFormUtcOffsetMinutes(form) ?? DEFAULT_UTC_OFFSET_MINUTES);
   const standardMeridian = standardMeridianDegrees(tzOffsetMin);
   const offsetMin = solarPreview
     ? Math.round(solarPreview.totalCorrectionMinutes)
@@ -104,8 +118,11 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   const longitudeLabel = form.longitude >= 0
     ? `经度 ${form.longitude.toFixed(1)}°E`
     : `经度 ${Math.abs(form.longitude).toFixed(1)}°W`;
-  const tzLabel = tzOffsetMin !== DEFAULT_UTC_OFFSET_MINUTES
+  const tzLabel = tzOffsetMin !== DEFAULT_UTC_OFFSET_MINUTES || resolvedTzId
     ? ` · ${formatUtcOffsetLabel(tzOffsetMin)}`
+    : '';
+  const selectedTzValue = form.utcOffsetMinutes !== undefined && (!resolvedTzId || form.timeZone === '')
+    ? String(form.utcOffsetMinutes)
     : '';
   const shichenInfo = SHICHEN[branch];
 
@@ -137,6 +154,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   // ─── Summary chip：全部必填完成后显示 ───────────────────
   const showSummary = steps[0] && steps[2] && !hasError;
   const lateZiNote = showSummary ? lateZiNoteForChart(formToBirthInfo(form)) : '';
+  const chinaDstNote = !hasError ? chinaDstNoteForForm(form) : '';
   const summaryText = showSummary
     ? [
         `${y}年${m}月${d}日`,
@@ -153,8 +171,9 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
       ...form,
       province: prov,
       city: firstCity?.name || '',
-      longitude: firstCity?.longitude ?? 120,
-      utcOffsetMinutes: firstCity?.utcOffsetMinutes,
+      longitude: firstCity?.longitude ?? standardMeridianDegrees(DEFAULT_UTC_OFFSET_MINUTES),
+      utcOffsetMinutes: undefined,
+      timeZone: firstCity?.timeZone,
     });
   };
 
@@ -164,9 +183,64 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     setForm({
       ...form,
       city: cityName,
-      longitude: cityData?.longitude ?? 120,
-      utcOffsetMinutes: cityData?.utcOffsetMinutes,
+      longitude: cityData?.longitude ?? standardMeridianDegrees(DEFAULT_UTC_OFFSET_MINUTES),
+      utcOffsetMinutes: undefined,
+      timeZone: cityData?.timeZone,
     });
+  };
+
+  const handleTimezoneChange = (rawValue: string) => {
+    if (rawValue === '') {
+      const cityData = form.province && form.city
+        ? PROVINCES.find(p => p.name === form.province)?.cities.find(c => c.name === form.city)
+        : undefined;
+      setForm({
+        ...form,
+        utcOffsetMinutes: undefined,
+        timeZone: cityData?.timeZone,
+        longitude: cityData ? cityData.longitude : standardMeridianDegrees(DEFAULT_UTC_OFFSET_MINUTES),
+      });
+      return;
+    }
+    const nextTz = parseInt(rawValue, 10);
+    if (!Number.isFinite(nextTz)) return;
+    const syncLongitude = !form.province && !form.city
+      ? standardMeridianDegrees(nextTz)
+      : form.longitude;
+    setForm({
+      ...form,
+      utcOffsetMinutes: nextTz,
+      timeZone: '',
+      longitude: syncLongitude,
+    });
+  };
+
+  const handleSubtractDstHour = () => {
+    const curH = parseInt(form.clockHour, 10) || 0;
+    const clearAutoOffset = selectedTzValue === '' ? { utcOffsetMinutes: undefined } : {};
+    if (curH > 0) {
+      setForm({ ...form, ...clearAutoOffset, clockHour: String(curH - 1) });
+      return;
+    }
+    if (isValidDate(y, m, d)) {
+      const prev = shiftGregorianDate({ year: y, month: m, day: d }, -1);
+      setForm({
+        ...form,
+        ...clearAutoOffset,
+        year: String(prev.year),
+        month: String(prev.month),
+        day: String(prev.day),
+        clockHour: '23',
+      });
+    }
+  };
+
+  const updateDateTimeField = (patch: Partial<Pick<BirthFormState, 'year' | 'month' | 'day' | 'clockHour' | 'clockMinute'>>) => {
+    setForm(prev => ({
+      ...prev,
+      ...patch,
+      ...(selectedTzValue === '' ? { utcOffsetMinutes: undefined } : {}),
+    }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -210,6 +284,12 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   } as React.CSSProperties;
 
   const errorInputStyle = { ...inputStyle, borderColor: errorClr };
+  const compactLocationInputStyle = {
+    ...inputStyle,
+    padding: '10px 10px',
+    fontSize: '12px',
+    minWidth: 0,
+  } as React.CSSProperties;
 
   function FieldError({ msg }: { msg: string }) {
     return (
@@ -277,7 +357,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div>
             <select
               value={form.year}
-              onChange={e => { setForm({ ...form, year: e.target.value }); setTouched(t => ({ ...t, year: true })); }}
+              onChange={e => { updateDateTimeField({ year: e.target.value }); setTouched(t => ({ ...t, year: true })); }}
               style={showErr('year') && errors.year ? errorInputStyle : inputStyle}
               required
             >
@@ -291,7 +371,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div>
             <select
               value={form.month}
-              onChange={e => { setForm({ ...form, month: e.target.value }); setTouched(t => ({ ...t, month: true })); }}
+              onChange={e => { updateDateTimeField({ month: e.target.value }); setTouched(t => ({ ...t, month: true })); }}
               style={showErr('month') && errors.month ? errorInputStyle : inputStyle}
               required
             >
@@ -305,7 +385,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div>
             <select
               value={form.day}
-              onChange={e => { setForm({ ...form, day: e.target.value }); setTouched(t => ({ ...t, day: true })); }}
+              onChange={e => { updateDateTimeField({ day: e.target.value }); setTouched(t => ({ ...t, day: true })); }}
               style={showErr('day') && errors.day ? errorInputStyle : inputStyle}
               required
             >
@@ -349,8 +429,50 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             ))}
           </select>
         </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)', gap: '8px', marginTop: '8px' }}>
+          <select
+            aria-label="出生时区"
+            value={selectedTzValue}
+            onChange={e => handleTimezoneChange(e.target.value)}
+            style={compactLocationInputStyle}
+            onFocus={e => { e.target.style.borderColor = focusBorder; }}
+            onBlur={e => { e.target.style.borderColor = inputBorder; }}
+          >
+            <option value="">
+              自动 ({formatUtcOffsetLabel(tzOffsetMin)})
+            </option>
+            {selectedTzValue !== '' && !UTC_OFFSET_OPTIONS.includes(Number(selectedTzValue)) && (
+              <option value={selectedTzValue}>
+                {formatUtcOffsetLabel(Number(selectedTzValue))}
+              </option>
+            )}
+            {UTC_OFFSET_OPTIONS.map(mins => (
+              <option key={mins} value={String(mins)}>
+                {formatUtcOffsetLabel(mins)}
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            aria-label="出生地经度"
+            step="0.1"
+            min="-180"
+            max="180"
+            value={Number.isFinite(form.longitude) ? form.longitude : 120}
+            onChange={e => {
+              const val = parseFloat(e.target.value);
+              if (Number.isFinite(val) && val >= -180 && val <= 180) {
+                setForm({ ...form, longitude: val });
+              }
+            }}
+            placeholder="经度（东正西负）"
+            style={compactLocationInputStyle}
+            onFocus={e => { e.target.style.borderColor = focusBorder; }}
+            onBlur={e => { e.target.style.borderColor = inputBorder; }}
+          />
+        </div>
         <AnimatePresence mode="wait">
-          {form.province ? (
+          {form.province || selectedTzValue !== '' || form.longitude !== DEFAULT_UTC_OFFSET_MINUTES / 4 ? (
             <motion.p
               key="location-info"
               initial={{ opacity: 0 }}
@@ -358,7 +480,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               exit={{ opacity: 0 }}
               style={{ fontSize: '10px', color: isDark ? 'rgba(180,210,235,0.85)' : 'rgba(100,70,10,0.5)', marginTop: '5px' }}
             >
-              {form.city || '（请选择城市）'} · {longitudeLabel}{tzLabel} · 时差 {offsetMin > 0 ? '+' : ''}{offsetMin} 分钟
+              {form.city || form.province || '自定义坐标'} · {longitudeLabel}{tzLabel} · 时差 {offsetMin > 0 ? '+' : ''}{offsetMin} 分钟
             </motion.p>
           ) : (
             <motion.p
@@ -385,7 +507,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
             <select
               value={form.clockHour}
-              onChange={e => setForm({ ...form, clockHour: e.target.value })}
+              onChange={e => updateDateTimeField({ clockHour: e.target.value })}
               style={inputStyle}
             >
               {Array.from({ length: 24 }, (_, i) => i).map(h => (
@@ -394,7 +516,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             </select>
             <select
               value={form.clockMinute}
-              onChange={e => setForm({ ...form, clockMinute: e.target.value })}
+              onChange={e => updateDateTimeField({ clockMinute: e.target.value })}
               style={inputStyle}
             >
               {Array.from({ length: 60 }, (_, i) => i).map(min => (
@@ -426,6 +548,48 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             不知道出生时间，以子时（23:00–01:00）起盘
           </span>
         </label>
+        <AnimatePresence>
+          {chinaDstNote && (
+            <motion.div
+              initial={{ opacity: 0, y: -4, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: 'auto' }}
+              exit={{ opacity: 0, y: -4, height: 0 }}
+              transition={{ duration: 0.2 }}
+              style={{
+                marginTop: '8px',
+                padding: '8px 12px',
+                borderRadius: '12px',
+                border: `1px solid ${isDark ? 'rgba(212,168,67,0.38)' : 'rgba(180,120,20,0.35)'}`,
+                background: isDark ? 'rgba(212,168,67,0.08)' : 'rgba(255,248,225,0.9)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+              }}
+            >
+              <span style={{ fontSize: '11px', lineHeight: 1.5, color: goldText }}>
+                ⚠ {chinaDstNote}
+              </span>
+              <button
+                type="button"
+                onClick={handleSubtractDstHour}
+                style={{
+                  flexShrink: 0,
+                  padding: '4px 10px',
+                  borderRadius: '8px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  border: `1px solid ${isDark ? 'rgba(212,168,67,0.5)' : 'rgba(180,120,20,0.45)'}`,
+                  background: isDark ? 'rgba(212,168,67,0.16)' : 'rgba(255,238,195,0.9)',
+                  color: goldText,
+                  cursor: 'pointer',
+                }}
+              >
+                减 1 小时
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ── 性别 ── */}

@@ -9,6 +9,7 @@ export interface BirthInfo {
   city?: string;       // 出生城市
   longitude?: number;  // 出生地经度（用于真太阳时校正）
   utcOffsetMinutes?: number; // 出生地标准时区偏移（分钟，如 UTC+8 = 480，莫斯科 UTC+3 = 180）
+  timeZone?: string; // 出生地 IANA 时区标识（用于解析历史夏令时与时区变更）
   /**
    * 原始输入（用户在表单里实际填的时间），已知出生时间时始终保留。
    * 例：用户输入 5/9 23:55 → year/month/day 会被改成 5/10（次日子时），
