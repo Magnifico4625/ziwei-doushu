@@ -5,18 +5,22 @@ import type { BirthInfo } from '@/lib/ziwei/types';
 import { daysInGregorianMonth, isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { SHICHEN } from '@/lib/ziwei/constants';
 import {
+  BIRTH_FORM_YEAR_MAX,
+  BIRTH_FORM_YEAR_MIN,
   chinaDstNoteForForm,
   formToBirthInfo,
   lateZiNoteForChart,
   resolveFormTimeZone,
   resolveFormTrueSolarTime,
   resolveFormUtcOffsetMinutes,
+  subtractOneClockHour,
 } from '@/lib/ziwei/share';
 import {
+  classifyZoneLocalTime,
   DEFAULT_UTC_OFFSET_MINUTES,
   formatUtcOffsetLabel,
-  shiftGregorianDate,
   standardMeridianDegrees,
+  type ZoneLocalTimeKind,
 } from '@/lib/ziwei/true-solar-time';
 import { useTheme } from '@/components/ThemeProvider';
 import { PROVINCES } from '@/lib/ziwei/cities';
@@ -59,6 +63,23 @@ function isValidDate(y: number, m: number, d: number): boolean {
   return isValidGregorianDate(y, m, d);
 }
 
+/** 时区切换日的非拦截提示。偏移规则见 `resolveTimeZoneOffsetMinutes`。 */
+function zoneTransitionHint(kind: ZoneLocalTimeKind | undefined): string {
+  switch (kind) {
+    case undefined:
+    case 'regular':
+      return '';
+    case 'gap':
+      return '该时刻在此时区不存在（夏令时拨快会跳过这一小时），不拦截起盘。';
+    case 'overlap':
+      return '该时刻在此时区出现了两次（夏令时拨回），不拦截起盘。';
+    default: {
+      const unreachable: never = kind;
+      return unreachable;
+    }
+  }
+}
+
 /** 下拉框里只放这个公历月真正有的日子。年份未选时，2 月最多到 29，绝不到 30。 */
 function selectableDayCount(year: number, month: number): number {
   if (month === 2 && !year) return 29;
@@ -89,12 +110,18 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
 
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  // 切换日提示依赖 Intl，服务端 ICU 与浏览器可能不一致。水合完成后再显示，避免文本对不上。
+  const [zoneHintMounted, setZoneHintMounted] = useState(false);
 
   // 表单状态变化时实时同步给父级（合盘等场景下父级靠这个收集双方数据）
   useEffect(() => {
     onFormSave?.({ ...form });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
+
+  useEffect(() => {
+    setZoneHintMounted(true);
+  }, []);
 
   const cityList = useMemo(() => {
     const prov = PROVINCES.find(p => p.name === form.province);
@@ -133,7 +160,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
 
   const errors = {
     year: !form.year ? '请选择出生年份'
-      : y < 1900 || y > 2026 ? '年份范围：1900–2026'
+      : y < BIRTH_FORM_YEAR_MIN || y > BIRTH_FORM_YEAR_MAX ? `年份范围：${BIRTH_FORM_YEAR_MIN}–${BIRTH_FORM_YEAR_MAX}`
       : '',
     month: !form.month ? '请选择月份' : '',
     day: !form.day ? '请选择日期'
@@ -155,6 +182,17 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   const showSummary = steps[0] && steps[2] && !hasError;
   const lateZiNote = showSummary ? lateZiNoteForChart(formToBirthInfo(form)) : '';
   const chinaDstNote = !hasError ? chinaDstNoteForForm(form) : '';
+  const clockHourNum = parseInt(form.clockHour, 10) || 0;
+  const clockMinuteNum = parseInt(form.clockMinute, 10) || 0;
+  const zoneLocalKind = !form.unknownTime && resolvedTzId && isValidDate(y, m, d)
+    ? classifyZoneLocalTime(resolvedTzId, y, m, d, clockHourNum, clockMinuteNum)
+    : undefined;
+  const zoneTransitionNote = zoneHintMounted ? zoneTransitionHint(zoneLocalKind) : '';
+  const dstSubtractBlocked = Boolean(chinaDstNote)
+    && y === BIRTH_FORM_YEAR_MIN
+    && m === 1
+    && d === 1
+    && clockHourNum === 0;
   const summaryText = showSummary
     ? [
         `${y}年${m}月${d}日`,
@@ -194,11 +232,11 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
       const cityData = form.province && form.city
         ? PROVINCES.find(p => p.name === form.province)?.cities.find(c => c.name === form.city)
         : undefined;
+      // 回到「自动」只恢复城市时区，不改经度。手填经度只在重新选择城市时写回。
       setForm({
         ...form,
         utcOffsetMinutes: undefined,
         timeZone: cityData?.timeZone,
-        longitude: cityData ? cityData.longitude : standardMeridianDegrees(DEFAULT_UTC_OFFSET_MINUTES),
       });
       return;
     }
@@ -216,23 +254,21 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   };
 
   const handleSubtractDstHour = () => {
-    const curH = parseInt(form.clockHour, 10) || 0;
+    const next = subtractOneClockHour(y, m, d, clockHourNum);
+    if (!next) return;
     const clearAutoOffset = selectedTzValue === '' ? { utcOffsetMinutes: undefined } : {};
-    if (curH > 0) {
-      setForm({ ...form, ...clearAutoOffset, clockHour: String(curH - 1) });
+    if (next.year === y && next.month === m && next.day === d) {
+      setForm({ ...form, ...clearAutoOffset, clockHour: String(next.hour) });
       return;
     }
-    if (isValidDate(y, m, d)) {
-      const prev = shiftGregorianDate({ year: y, month: m, day: d }, -1);
-      setForm({
-        ...form,
-        ...clearAutoOffset,
-        year: String(prev.year),
-        month: String(prev.month),
-        day: String(prev.day),
-        clockHour: '23',
-      });
-    }
+    setForm({
+      ...form,
+      ...clearAutoOffset,
+      year: String(next.year),
+      month: String(next.month),
+      day: String(next.day),
+      clockHour: String(next.hour),
+    });
   };
 
   const updateDateTimeField = (patch: Partial<Pick<BirthFormState, 'year' | 'month' | 'day' | 'clockHour' | 'clockMinute'>>) => {
@@ -249,7 +285,8 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
     setTouched({ year: true, month: true, day: true });
     if (hasError) return;
     onFormSave?.({ ...form });
-    // 晚子时换日与分享链接共用 formToBirthInfo：先拒绝不存在的公历日，23:00–23:59 再进到次日。
+    // 排盘与分享链接都走 formToBirthInfo：先拒绝不存在的公历日。
+    // 填了出生地或时区时按真太阳时和晚子时规则决定排盘日；没填地点时，才是钟表 23:00–23:59 进次日。
     onSubmit(formToBirthInfo(form));
   };
 
@@ -317,7 +354,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      style={{ background: bg, border: `1px solid ${border}`, borderRadius: '24px', padding: '28px', backdropFilter: 'blur(20px)' }}
+      style={{ background: bg, border: `1px solid ${border}`, borderRadius: '24px', padding: '28px clamp(12px, 3vw, 28px)', backdropFilter: 'blur(20px)', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}
     >
       {/* 标题 */}
       <h3 style={{ color: goldText, fontSize: '12px', letterSpacing: '0.4em', textAlign: 'center', marginBottom: '20px', fontWeight: 500 }}>
@@ -362,7 +399,7 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               required
             >
               <option value="">年份</option>
-              {Array.from({ length: 127 }, (_, i) => 2026 - i).map(yr => (
+              {Array.from({ length: BIRTH_FORM_YEAR_MAX - BIRTH_FORM_YEAR_MIN + 1 }, (_, i) => BIRTH_FORM_YEAR_MAX - i).map(yr => (
                 <option key={yr} value={String(yr)}>{yr}</option>
               ))}
             </select>
@@ -548,6 +585,11 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
             不知道出生时间，以子时（23:00–01:00）起盘
           </span>
         </label>
+        {zoneTransitionNote && (
+          <p style={{ fontSize: '10px', lineHeight: 1.5, marginTop: '6px', marginBottom: 0, color: isDark ? 'rgba(165,185,210,0.75)' : 'rgba(140,100,20,0.55)' }}>
+            {zoneTransitionNote}
+          </p>
+        )}
         <AnimatePresence>
           {chinaDstNote && (
             <motion.div
@@ -562,31 +604,42 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
                 border: `1px solid ${isDark ? 'rgba(212,168,67,0.38)' : 'rgba(180,120,20,0.35)'}`,
                 background: isDark ? 'rgba(212,168,67,0.08)' : 'rgba(255,248,225,0.9)',
                 display: 'flex',
+                flexWrap: 'wrap',
                 alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '10px',
+                gap: '8px',
+                maxWidth: '100%',
+                minWidth: 0,
               }}
             >
-              <span style={{ fontSize: '11px', lineHeight: 1.5, color: goldText }}>
+              <span style={{ flex: '1 1 12rem', minWidth: 0, fontSize: '11px', lineHeight: 1.5, color: goldText }}>
                 ⚠ {chinaDstNote}
               </span>
               <button
                 type="button"
                 onClick={handleSubtractDstHour}
+                disabled={dstSubtractBlocked}
                 style={{
-                  flexShrink: 0,
-                  padding: '4px 10px',
+                  flex: '0 0 auto',
+                  whiteSpace: 'nowrap',
+                  minHeight: '44px',
+                  padding: '8px 14px',
                   borderRadius: '8px',
-                  fontSize: '11px',
+                  fontSize: '13px',
                   fontWeight: 500,
                   border: `1px solid ${isDark ? 'rgba(212,168,67,0.5)' : 'rgba(180,120,20,0.45)'}`,
                   background: isDark ? 'rgba(212,168,67,0.16)' : 'rgba(255,238,195,0.9)',
                   color: goldText,
-                  cursor: 'pointer',
+                  cursor: dstSubtractBlocked ? 'not-allowed' : 'pointer',
+                  opacity: dstSubtractBlocked ? 0.45 : 1,
                 }}
               >
                 减 1 小时
               </button>
+              {dstSubtractBlocked && (
+                <span style={{ flex: '1 1 100%', fontSize: '11px', lineHeight: 1.5, color: goldText }}>
+                  已是最早可排盘时刻（{BIRTH_FORM_YEAR_MIN}年1月1日 0时），无法再减。
+                </span>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

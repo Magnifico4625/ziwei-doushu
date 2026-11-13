@@ -1,5 +1,5 @@
 import type { BirthFormState } from '@/components/BirthForm';
-import { findCityInfo, resolveCityUtcOffsetMinutes } from './cities';
+import { findCityInfo, type CityInfo } from './cities';
 import { chinaDSTRange, chinaDSTSpan, isChinaDST } from './dst-cn';
 import { isValidGregorianDate } from './gregorian-date';
 import {
@@ -50,6 +50,46 @@ export function calcTrueSolarBranch(
     timeZone: opts.timeZone,
     includeEquationOfTime: opts.includeEquationOfTime,
   }).branch;
+}
+
+/** 出生表单可选年份。减 1 小时不得早于该下限的 1 月 1 日 0 时。 */
+export const BIRTH_FORM_YEAR_MIN = 1900;
+export const BIRTH_FORM_YEAR_MAX = 2026;
+
+/** 按城市配置的 IANA 时区解析指定出生年月日时的实际 UTC 偏移（含夏令时/历史时区变化）；未配置或日期无效时回退静态偏移。 */
+export function resolveCityUtcOffsetMinutes(
+  city: CityInfo,
+  year?: number,
+  month?: number,
+  day?: number,
+  clockHour = 12,
+  clockMinute = 0,
+): number | undefined {
+  if (city.timeZone && year && month && day) {
+    const resolved = resolveTimeZoneOffsetMinutes(city.timeZone, year, month, day, clockHour, clockMinute);
+    if (resolved !== undefined) return resolved;
+  }
+  return city.utcOffsetMinutes;
+}
+
+/**
+ * 表单「减 1 小时」。
+ * 钟点大于 0 时只减小时，不要求日期已填。
+ * 0 时再减会进到前一日 23 时；1900-01-01 00 时再减会落到支持范围外，返回 null。
+ */
+export function subtractOneClockHour(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+): { year: number; month: number; day: number; hour: number } | null {
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+  if (hour > 0) return { year, month, day, hour: hour - 1 };
+  if (!isValidGregorianDate(year, month, day)) return null;
+  if (year === BIRTH_FORM_YEAR_MIN && month === 1 && day === 1) return null;
+  const prev = shiftGregorianDate({ year, month, day }, -1);
+  if (prev.year < BIRTH_FORM_YEAR_MIN) return null;
+  return { year: prev.year, month: prev.month, day: prev.day, hour: 23 };
 }
 
 type FormTimezoneFields = Pick<BirthFormState, 'province' | 'city' | 'utcOffsetMinutes'>

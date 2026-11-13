@@ -45,14 +45,18 @@ This repo is an open snapshot of the engine behind [metisziwei.com](https://meti
 
 | Feature | Notes |
 |---|---|
-| True solar time | Longitude offset plus the equation of time, supporting international cities with historical IANA time zones (DST-aware) and manual UTC offsets (`UTC-12` to `UTC+14`, including `UTC+5:30`) |
-| China DST | Detects China DST periods from the convention table in `dst-cn.ts` (1986–1991 national DST and the simplified pre-1979 national table) and shows a warning in the birth form (with a one-click −1 hour adjustment) instead of silently altering entered clock times |
+| True solar time | Longitude offset plus the equation of time, supporting international cities with historical IANA time zones (DST-aware) and manual UTC offsets (`UTC-12` to `UTC+14`, including `UTC+5:30`). On a transition, `resolveTimeZoneOffsetMinutes` iterates; it does not force “post-gap” or “first overlap” |
+| China DST | The commonly used convention table in `dst-cn.ts` (not IANA) drives a birth-form warning and a one-click −1 hour control. The engine does not change the entered time. See the note below for how the table differs from IANA |
 | Leap months | Four configurable conventions (previous month / next month / split by day / same month) |
 | Late Zi hour | Determined by true solar time when a location/timezone is set (23:00–23:59 charts on the next day; 00:00–00:59 is early Zi on that solar day), or by clock hour when no location is given; switchable |
 | Star brightness | 7 levels (庙 旺 得 利 平 不 陷); brightness tables of different schools are switchable, not hard-coded |
 | Four Transformations | Natal, decade (大限) and annual (流年) transformations, plus flying-star self-transformations |
 | Twelve spirits | Natal layer by year branch, annual layer by the annual branch |
 | Patterns | 1,100+ lines of pattern rules (紫府同宫, 日月并明, 七杀朝斗, …) |
+
+On an IANA transition the local clock is treated as UTC and the offset is refined twice. A spring-forward gap and a fall-back overlap can land on either side. Examples: New York 2024-03-10 02:30 (nonexistent) → UTC−5; London 2024-03-31 01:30 → UTC+1; Moscow 2011-03-27 02:30 → UTC+4; New York 2024-11-03 01:30 (repeated) → the earlier UTC−4; London 2024-10-27 01:30 → UTC+0; Moscow 2014-10-26 01:30 → UTC+3. The form only shows a hint.
+
+The China DST table is the commonly used national table. IANA `Asia/Shanghai` also has 1919; 1935–1939, 1950–1961, 1974, 1975 and 1979 are in the table and absent from IANA; the 1940s differ; 1988 starts on 10 April in the table and 17 April in IANA. The warning follows the table.
 
 Engine code lives in `lib/ziwei/` (entry point: `generateChart()` in `algorithm.ts`). Inputs are a **Gregorian** date and an **hour branch index 0–11** (子 = 0 … 亥 = 11), not a clock hour.
 

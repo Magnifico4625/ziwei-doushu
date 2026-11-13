@@ -23,7 +23,7 @@
 import assert from 'node:assert/strict';
 import type { BirthFormState } from '../../components/BirthForm';
 import { generateChart } from '../../lib/ziwei/algorithm';
-import { findCityInfo, PROVINCES } from '../../lib/ziwei/cities';
+import { findCityInfo, inferCityTimeZone, PROVINCES } from '../../lib/ziwei/cities';
 import {
   calcTrueSolarBranch,
   chinaDstNoteForForm,
@@ -36,14 +36,17 @@ import {
   resolveFormTrueSolarTime,
   resolveFormUtcOffsetMinutes,
   searchParamsToForm,
+  subtractOneClockHour,
 } from '../../lib/ziwei/share';
 import {
   calculateTrueSolarTime,
+  classifyZoneLocalTime,
   DEFAULT_UTC_OFFSET_MINUTES,
   formatUtcOffsetLabel,
   resolveTimeZoneOffsetMinutes,
   resolveZiweiDayOffset,
   standardMeridianDegrees,
+  type ZoneLocalTimeKind,
 } from '../../lib/ziwei/true-solar-time';
 
 function makeForm(overrides: Partial<BirthFormState>): BirthFormState {
@@ -558,6 +561,73 @@ assert.equal(formatUtcOffsetLabel(-300), 'UTC-5');
 
   const overseasDstDate = makeForm({ year: '1990', month: '5', day: '15', province: '海外 / 国际', city: '莫斯科', longitude: 37.6 });
   assert.equal(chinaDstNoteForForm(overseasDstDate, 'zh'), '');
+
+  assert.equal(subtractOneClockHour(1900, 1, 1, 0), null);
+  assert.deepEqual(subtractOneClockHour(1900, 1, 1, 1), { year: 1900, month: 1, day: 1, hour: 0 });
+  assert.deepEqual(subtractOneClockHour(1900, 1, 2, 0), { year: 1900, month: 1, day: 1, hour: 23 });
+  assert.deepEqual(subtractOneClockHour(1986, 5, 4, 0), { year: 1986, month: 5, day: 3, hour: 23 });
+}
+
+// ── 6. IANA 切换日：跳空与重叠按现有迭代锁定，城市时区只来自 cities.ts ──
+{
+  const transitions: ReadonlyArray<readonly [string, number, number, number, number, number, number, ZoneLocalTimeKind]> = [
+    ['America/New_York', 2024, 3, 10, 2, 30, -300, 'gap'],
+    ['America/New_York', 2024, 3, 10, 1, 30, -300, 'regular'],
+    ['America/New_York', 2024, 3, 10, 3, 30, -240, 'regular'],
+    ['America/New_York', 2024, 11, 3, 1, 30, -240, 'overlap'],
+    ['Europe/London', 2024, 3, 31, 1, 30, 60, 'gap'],
+    ['Europe/London', 2024, 10, 27, 1, 30, 0, 'overlap'],
+    ['Europe/Moscow', 2011, 3, 27, 2, 30, 240, 'gap'],
+    ['Europe/Moscow', 2014, 10, 26, 1, 30, 180, 'overlap'],
+    ['Europe/London', 2024, 1, 15, 12, 0, 0, 'regular'],
+    ['Europe/Moscow', 2020, 2, 15, 12, 0, 180, 'regular'],
+  ];
+  for (const [zone, year, month, day, hour, minute, offset, kind] of transitions) {
+    const label = `${zone} ${year}-${month}-${day} ${hour}:${minute}`;
+    assert.equal(resolveTimeZoneOffsetMinutes(zone, year, month, day, hour, minute), offset, label);
+    assert.equal(classifyZoneLocalTime(zone, year, month, day, hour, minute), kind, label);
+  }
+
+  const overseas = PROVINCES.find((p) => p.name === '海外 / 国际');
+  assert.ok(overseas);
+  for (const city of overseas.cities) {
+    assert.ok(city.timeZone, city.name);
+    assert.equal(city.utcOffsetMinutes !== undefined, true, city.name);
+    assert.equal(inferCityTimeZone(city.longitude, city.utcOffsetMinutes!), city.timeZone, city.name);
+    const viaCityTable = calculateTrueSolarTime({
+      year: 2020,
+      month: 1,
+      day: 15,
+      clockHour: 12,
+      clockMinute: 0,
+      longitude: city.longitude,
+      utcOffsetMinutes: city.utcOffsetMinutes,
+    });
+    const explicit = calculateTrueSolarTime({
+      year: 2020,
+      month: 1,
+      day: 15,
+      clockHour: 12,
+      clockMinute: 0,
+      longitude: city.longitude,
+      utcOffsetMinutes: city.utcOffsetMinutes,
+      timeZone: city.timeZone,
+    });
+    assert.equal(viaCityTable.timeZone, city.timeZone, city.name);
+    assert.equal(viaCityTable.utcOffsetMinutes, explicit.utcOffsetMinutes, city.name);
+  }
+
+  const beijing = calculateTrueSolarTime({
+    year: 1990,
+    month: 6,
+    day: 15,
+    clockHour: 12,
+    clockMinute: 0,
+    longitude: 116.4,
+    utcOffsetMinutes: 480,
+  });
+  assert.equal(beijing.timeZone, undefined);
+  assert.equal(beijing.utcOffsetMinutes, 480);
 }
 
 console.log('✅ true-solar-time & timezone parameterization regression passed');

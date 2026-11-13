@@ -1,5 +1,3 @@
-import { resolveTimeZoneOffsetMinutes } from './true-solar-time';
-
 export interface CityInfo {
   name: string;
   longitude: number; // degrees East (negative for West)
@@ -740,18 +738,18 @@ export function findCityInfo(provinceName: string, cityName: string): CityInfo |
   return prov?.cities.find((c) => c.name === cityName);
 }
 
-/** 按城市配置的 IANA 时区解析指定出生年月日时的实际 UTC 偏移（含夏令时/历史时区变化）；未配置或日期无效时回退静态偏移。 */
-export function resolveCityUtcOffsetMinutes(
-  city: CityInfo,
-  year?: number,
-  month?: number,
-  day?: number,
-  clockHour = 12,
-  clockMinute = 0,
-): number | undefined {
-  if (city.timeZone && year && month && day) {
-    const resolved = resolveTimeZoneOffsetMinutes(city.timeZone, year, month, day, clockHour, clockMinute);
-    if (resolved !== undefined) return resolved;
+/**
+ * 用经度 + 标准（冬令）偏移反查城市表里的 IANA 时区。
+ * 这是海外时区的唯一来源；`true-solar-time.ts` 在调用方没传 `timeZone` 时靠它推断。
+ * 中国城市没有 `timeZone` / `utcOffsetMinutes`，不会命中。同一对经度与偏移以表中先出现的城市为准。
+ */
+export function inferCityTimeZone(longitude: number, utcOffsetMinutes: number): string | undefined {
+  for (const province of PROVINCES) {
+    for (const city of province.cities) {
+      if (!city.timeZone || city.utcOffsetMinutes === undefined) continue;
+      if (city.utcOffsetMinutes !== utcOffsetMinutes) continue;
+      if (Math.abs(city.longitude - longitude) < 1e-6) return city.timeZone;
+    }
   }
-  return city.utcOffsetMinutes;
+  return undefined;
 }
