@@ -21,6 +21,7 @@
  * 跑: npx tsx scripts/regression/true-solar-time-timezone.test.ts
  */
 import assert from 'node:assert/strict';
+import { Temporal } from '@js-temporal/polyfill';
 import type { BirthFormState } from '../../components/BirthForm';
 import { generateChart } from '../../lib/ziwei/algorithm';
 import { findCityInfo, inferCityTimeZone, PROVINCES } from '../../lib/ziwei/cities';
@@ -568,24 +569,135 @@ assert.equal(formatUtcOffsetLabel(-300), 'UTC-5');
   assert.deepEqual(subtractOneClockHour(1986, 5, 4, 0), { year: 1986, month: 5, day: 3, hour: 23 });
 }
 
-// ── 6. IANA 切换日：跳空与重叠按现有迭代锁定，城市时区只来自 cities.ts ──
+function temporalCompatibleOffset(
+  zone: string,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): number {
+  const zoned = Temporal.ZonedDateTime.from(
+    { timeZone: zone, year, month, day, hour, minute, second: 0 },
+    { disambiguation: 'compatible' },
+  );
+  return zoned.offsetNanoseconds / 60_000_000_000;
+}
+
+const sweepFormatters = new Map<string, Intl.DateTimeFormat>();
+
+/** 只用来找出哪一天中午的偏移变了。断言仍对照 Temporal。 */
+function noonOffsetForSweep(zone: string, year: number, month: number, day: number): number {
+  let dtf = sweepFormatters.get(zone);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    });
+    sweepFormatters.set(zone, dtf);
+  }
+  const read = (utcMs: number): number => {
+    const parts = dtf.formatToParts(new Date(utcMs));
+    const vals: Record<string, number> = {};
+    for (const part of parts) {
+      if (part.type !== 'literal') vals[part.type] = Number(part.value);
+    }
+    const asUtc = Date.UTC(vals.year, (vals.month ?? 1) - 1, vals.day ?? 1, vals.hour ?? 0, vals.minute ?? 0, vals.second ?? 0);
+    return Math.round((asUtc - utcMs) / 60_000);
+  };
+  const approx = Date.UTC(year, month - 1, day, 12, 0, 0);
+  const first = read(approx);
+  return read(approx - first * 60_000);
+}
+
+function shiftUtcDate(year: number, month: number, day: number, delta: number): { year: number; month: number; day: number } {
+  const shifted = new Date(Date.UTC(year, month - 1, day + delta));
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate() };
+}
+
+// ── 6. IANA 切换日：跳空取过渡后、重叠取较早一次；城市时区只来自 cities.ts ──
 {
   const transitions: ReadonlyArray<readonly [string, number, number, number, number, number, number, ZoneLocalTimeKind]> = [
-    ['America/New_York', 2024, 3, 10, 2, 30, -300, 'gap'],
+    ['America/New_York', 2024, 3, 10, 2, 30, -240, 'gap'],
     ['America/New_York', 2024, 3, 10, 1, 30, -300, 'regular'],
     ['America/New_York', 2024, 3, 10, 3, 30, -240, 'regular'],
     ['America/New_York', 2024, 11, 3, 1, 30, -240, 'overlap'],
+    ['America/Los_Angeles', 2024, 3, 10, 2, 30, -420, 'gap'],
+    ['America/Los_Angeles', 2024, 11, 3, 1, 30, -420, 'overlap'],
+    ['America/Toronto', 2024, 3, 10, 2, 30, -240, 'gap'],
+    ['America/Toronto', 2024, 11, 3, 1, 30, -240, 'overlap'],
     ['Europe/London', 2024, 3, 31, 1, 30, 60, 'gap'],
-    ['Europe/London', 2024, 10, 27, 1, 30, 0, 'overlap'],
+    ['Europe/London', 2024, 10, 27, 1, 30, 60, 'overlap'],
+    ['Europe/Paris', 2024, 3, 31, 2, 30, 120, 'gap'],
+    ['Europe/Paris', 2024, 10, 27, 2, 30, 120, 'overlap'],
+    ['Europe/Berlin', 2024, 3, 31, 2, 30, 120, 'gap'],
+    ['Europe/Berlin', 2024, 10, 27, 2, 30, 120, 'overlap'],
     ['Europe/Moscow', 2011, 3, 27, 2, 30, 240, 'gap'],
-    ['Europe/Moscow', 2014, 10, 26, 1, 30, 180, 'overlap'],
+    ['Europe/Moscow', 2014, 10, 26, 1, 30, 240, 'overlap'],
+    ['Europe/Moscow', 2010, 3, 28, 2, 30, 240, 'gap'],
+    ['Europe/Moscow', 2010, 10, 31, 2, 30, 240, 'overlap'],
+    ['Australia/Sydney', 2024, 10, 6, 2, 30, 660, 'gap'],
+    ['Australia/Sydney', 2024, 4, 7, 2, 30, 660, 'overlap'],
+    ['Australia/Melbourne', 2024, 10, 6, 2, 30, 660, 'gap'],
+    ['Australia/Melbourne', 2024, 4, 7, 2, 30, 660, 'overlap'],
     ['Europe/London', 2024, 1, 15, 12, 0, 0, 'regular'],
     ['Europe/Moscow', 2020, 2, 15, 12, 0, 180, 'regular'],
   ];
   for (const [zone, year, month, day, hour, minute, offset, kind] of transitions) {
     const label = `${zone} ${year}-${month}-${day} ${hour}:${minute}`;
     assert.equal(resolveTimeZoneOffsetMinutes(zone, year, month, day, hour, minute), offset, label);
+    assert.equal(temporalCompatibleOffset(zone, year, month, day, hour, minute), offset, label);
     assert.equal(classifyZoneLocalTime(zone, year, month, day, hour, minute), kind, label);
+  }
+
+  const sweepZones = [
+    'America/New_York',
+    'America/Los_Angeles',
+    'America/Toronto',
+    'Europe/London',
+    'Europe/Paris',
+    'Europe/Berlin',
+    'Europe/Moscow',
+    'Australia/Sydney',
+    'Australia/Melbourne',
+  ] as const;
+  for (const zone of sweepZones) {
+    let cursor = { year: 2000, month: 1, day: 1 };
+    const end = Date.UTC(2026, 0, 1);
+    let prevNoon = noonOffsetForSweep(zone, 2000, 1, 1);
+    while (Date.UTC(cursor.year, cursor.month - 1, cursor.day) < end) {
+      const noon = noonOffsetForSweep(zone, cursor.year, cursor.month, cursor.day);
+      if (cursor.day === 1) {
+        assert.equal(
+          resolveTimeZoneOffsetMinutes(zone, cursor.year, cursor.month, cursor.day, 12, 0),
+          noon,
+          `${zone} ${cursor.year}-${cursor.month}-01 noon`,
+        );
+      }
+      if (noon !== prevNoon) {
+        for (const day of [shiftUtcDate(cursor.year, cursor.month, cursor.day, -1), cursor]) {
+          if (day.year < 2000 || day.year > 2025) continue;
+          for (let hour = 0; hour <= 5; hour += 1) {
+            for (const minute of [0, 30, 59]) {
+              const label = `${zone} ${day.year}-${day.month}-${day.day} ${hour}:${minute}`;
+              assert.equal(
+                resolveTimeZoneOffsetMinutes(zone, day.year, day.month, day.day, hour, minute),
+                temporalCompatibleOffset(zone, day.year, day.month, day.day, hour, minute),
+                label,
+              );
+            }
+          }
+        }
+      }
+      prevNoon = noon;
+      cursor = shiftUtcDate(cursor.year, cursor.month, cursor.day, 1);
+    }
   }
 
   const overseas = PROVINCES.find((p) => p.name === '海外 / 国际');

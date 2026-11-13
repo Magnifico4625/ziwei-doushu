@@ -63,16 +63,17 @@ function isValidDate(y: number, m: number, d: number): boolean {
   return isValidGregorianDate(y, m, d);
 }
 
-/** 时区切换日的非拦截提示。偏移规则见 `resolveTimeZoneOffsetMinutes`。 */
-function zoneTransitionHint(kind: ZoneLocalTimeKind | undefined): string {
+/** 时区切换日的非拦截提示。说出实际采用的 UTC 偏移。 */
+function zoneTransitionHint(kind: ZoneLocalTimeKind | undefined, offsetMinutes: number | undefined): string {
+  const label = offsetMinutes === undefined ? '' : formatUtcOffsetLabel(offsetMinutes);
   switch (kind) {
     case undefined:
     case 'regular':
       return '';
     case 'gap':
-      return '该时刻在此时区不存在（夏令时拨快会跳过这一小时），不拦截起盘。';
+      return `该时刻在此时区不存在（夏令时拨快已跳过），按过渡后的 ${label} 计算。`;
     case 'overlap':
-      return '该时刻在此时区出现了两次（夏令时拨回），不拦截起盘。';
+      return `该时刻在此时区出现了两次（夏令时拨回），按较早一次的 ${label} 计算。`;
     default: {
       const unreachable: never = kind;
       return unreachable;
@@ -187,12 +188,9 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
   const zoneLocalKind = !form.unknownTime && resolvedTzId && isValidDate(y, m, d)
     ? classifyZoneLocalTime(resolvedTzId, y, m, d, clockHourNum, clockMinuteNum)
     : undefined;
-  const zoneTransitionNote = zoneHintMounted ? zoneTransitionHint(zoneLocalKind) : '';
-  const dstSubtractBlocked = Boolean(chinaDstNote)
-    && y === BIRTH_FORM_YEAR_MIN
-    && m === 1
-    && d === 1
-    && clockHourNum === 0;
+  const zoneTransitionNote = zoneHintMounted
+    ? zoneTransitionHint(zoneLocalKind, solarPreview?.utcOffsetMinutes)
+    : '';
   const summaryText = showSummary
     ? [
         `${y}年${m}月${d}日`,
@@ -617,7 +615,6 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
               <button
                 type="button"
                 onClick={handleSubtractDstHour}
-                disabled={dstSubtractBlocked}
                 style={{
                   flex: '0 0 auto',
                   whiteSpace: 'nowrap',
@@ -629,17 +626,11 @@ export default function BirthForm({ onSubmit, loading, initialData, onFormSave, 
                   border: `1px solid ${isDark ? 'rgba(212,168,67,0.5)' : 'rgba(180,120,20,0.45)'}`,
                   background: isDark ? 'rgba(212,168,67,0.16)' : 'rgba(255,238,195,0.9)',
                   color: goldText,
-                  cursor: dstSubtractBlocked ? 'not-allowed' : 'pointer',
-                  opacity: dstSubtractBlocked ? 0.45 : 1,
+                  cursor: 'pointer',
                 }}
               >
                 减 1 小时
               </button>
-              {dstSubtractBlocked && (
-                <span style={{ flex: '1 1 100%', fontSize: '11px', lineHeight: 1.5, color: goldText }}>
-                  已是最早可排盘时刻（{BIRTH_FORM_YEAR_MIN}年1月1日 0时），无法再减。
-                </span>
-              )}
             </motion.div>
           )}
         </AnimatePresence>

@@ -169,22 +169,120 @@ function clampClock(clockHour: number, clockMinute: number): { hour: number; min
   return { hour, minute };
 }
 
+function civilAsUtcMs(year: number, month: number, day: number, hour: number, minute: number): number {
+  return Date.UTC(year, month - 1, day, hour, minute, 0);
+}
+
+/** 先把当地钟点当成 UTC，迭代两次，得到落在真实瞬间附近的偏移。普通时刻这就是答案；切换日还要再消歧。 */
+function approximateZoneOffsetMinutes(dtf: Intl.DateTimeFormat, civilUtcMs: number): number {
+  const o1 = readZoneInstant(dtf, civilUtcMs).offsetMinutes;
+  const o2 = readZoneInstant(dtf, civilUtcMs - o1 * 60_000).offsetMinutes;
+  return readZoneInstant(dtf, civilUtcMs - o2 * 60_000).offsetMinutes;
+}
+
+interface OffsetCandidate {
+  offsetMinutes: number;
+  utcMs: number;
+}
+
+/**
+ * 在近似瞬间附近收集能把该当地钟点往返还原的偏移。
+ * 一个 = 普通时刻，两个 = 秋令重叠。春令跳空一个都没有。
+ */
+function validOffsetCandidates(
+  dtf: Intl.DateTimeFormat,
+  civilUtcMs: number,
+  aroundUtcMs: number,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): OffsetCandidate[] {
+  const seen = new Set<number>();
+  const valid: OffsetCandidate[] = [];
+  for (let deltaMin = -180; deltaMin <= 180; deltaMin += 30) {
+    const probe = readZoneInstant(dtf, aroundUtcMs + deltaMin * 60_000);
+    if (seen.has(probe.offsetMinutes)) continue;
+    seen.add(probe.offsetMinutes);
+    const utcMs = civilUtcMs - probe.offsetMinutes * 60_000;
+    const back = readZoneInstant(dtf, utcMs);
+    if (!sameCivilMinute(back, year, month, day, hour, minute)) continue;
+    valid.push({ offsetMinutes: probe.offsetMinutes, utcMs });
+  }
+  return valid;
+}
+
+function pinpointOffsetChange(
+  dtf: Intl.DateTimeFormat,
+  loMs: number,
+  hiMs: number,
+): { instantMs: number; before: number; after: number } {
+  let before = readZoneInstant(dtf, loMs).offsetMinutes;
+  let lo = loMs;
+  let hi = hiMs;
+  while (hi - lo > 1000) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (readZoneInstant(dtf, mid).offsetMinutes === before) lo = mid;
+    else hi = mid;
+  }
+  return {
+    instantMs: hi,
+    before,
+    after: readZoneInstant(dtf, hi).offsetMinutes,
+  };
+}
+
+/**
+ * 春令跳空：当地钟点落在「拨快」跳过的区间里时，返回过渡之后的偏移。
+ * 与南北半球无关——只看偏移变大（当地时钟往前跳）的那一次过渡。
+ */
+function postTransitionOffsetForGap(
+  dtf: Intl.DateTimeFormat,
+  aroundUtcMs: number,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): number | undefined {
+  const requested = civilAsUtcMs(year, month, day, hour, minute);
+  const windowMs = 8 * 60 * 60_000;
+  const stepMs = 20 * 60_000;
+  const start = aroundUtcMs - windowMs;
+  let prevMs = start;
+  let prevOffset = readZoneInstant(dtf, start).offsetMinutes;
+  for (let t = start + stepMs; t <= aroundUtcMs + windowMs; t += stepMs) {
+    const offset = readZoneInstant(dtf, t).offsetMinutes;
+    if (offset !== prevOffset) {
+      const change = pinpointOffsetChange(dtf, prevMs, t);
+      if (change.after > change.before) {
+        const beforeWall = readZoneInstant(dtf, change.instantMs - 1000);
+        const afterWall = readZoneInstant(dtf, change.instantMs);
+        const beforeCivil = civilAsUtcMs(beforeWall.year, beforeWall.month, beforeWall.day, beforeWall.hour, beforeWall.minute);
+        const afterCivil = civilAsUtcMs(afterWall.year, afterWall.month, afterWall.day, afterWall.hour, afterWall.minute);
+        if (requested > beforeCivil && requested < afterCivil) return change.after;
+      }
+    }
+    prevOffset = offset;
+    prevMs = t;
+  }
+  return undefined;
+}
+
 /**
  * 解析指定 IANA 时区在给定当地公历日期与时刻的 UTC 偏移（分钟），
  * 自动包含历史夏令时（DST）与时区改革（如俄罗斯 2011–2014 永久夏令时）。
  *
- * 算法：把当地钟点先当成 UTC，读该瞬间的偏移 o1，再读「当地钟点 − o1」的偏移 o2，
- * 返回「当地钟点 − o2」上的偏移。正常时刻两次迭代后就是该时区的实际偏移。
+ * 消歧与 Temporal `disambiguation: 'compatible'` 相同，不看南北半球、也不看经度正负：
+ * - 当地时间不存在（春令拨快跳过的那段）：用过渡之后的偏移。
+ * - 当地时间出现两次（秋令拨回重叠的那段）：用较早一次的偏移（过渡前的那一侧）。
+ * - 普通时刻：用唯一能往返还原的偏移。
  *
- * 切换日没有另加「跳空一律取拨快后、重叠一律取第一次」的规则，结果就是上面这次迭代。
- * 春令被跳过的钟点和秋令重复的钟点，都可能落到过渡前或过渡后：
- * - 不存在的当地时间（春令跳空）：纽约 2024-03-10 02:30 → UTC−5（过渡前）；
- *   伦敦 2024-03-31 01:30 → UTC+1、莫斯科 2011-03-27 02:30 → UTC+4（过渡后）。
- * - 重复的当地时间（秋令拨回）：纽约 2024-11-03 01:30 → UTC−4（较早一次，夏令时）；
- *   伦敦 2024-10-27 01:30 → UTC+0、莫斯科 2014-10-26 01:30 → UTC+3（较晚一次）。
- *
- * 这些例子由 `scripts/regression/true-solar-time-timezone.test.ts` 锁住。
- * 不存在或重复只影响提示（见 `classifyZoneLocalTime`），不改变这里返回的偏移。
+ * 例如纽约 2024-03-10 02:30（不存在）为 UTC−4，伦敦 2024-03-31 01:30 为 UTC+1，
+ * 莫斯科 2011-03-27 02:30 为 UTC+4，悉尼 2024-10-06 02:30 为 UTC+11；
+ * 纽约 2024-11-03 01:30（出现两次）为较早的 UTC−4，伦敦 2024-10-27 01:30 为 UTC+1，
+ * 莫斯科 2014-10-26 01:30 为 UTC+4，悉尼 2024-04-07 02:30 为 UTC+11。
  */
 export function resolveTimeZoneOffsetMinutes(
   timeZone: string,
@@ -199,10 +297,19 @@ export function resolveTimeZoneOffsetMinutes(
   if (!dtf) return undefined;
 
   const { hour, minute } = clampClock(clockHour, clockMinute);
-  const approxUtcMs = Date.UTC(year, month - 1, day, hour, minute, 0);
-  const o1 = readZoneInstant(dtf, approxUtcMs).offsetMinutes;
-  const o2 = readZoneInstant(dtf, approxUtcMs - o1 * 60_000).offsetMinutes;
-  return readZoneInstant(dtf, approxUtcMs - o2 * 60_000).offsetMinutes;
+  const civilUtcMs = civilAsUtcMs(year, month, day, hour, minute);
+  const rough = approximateZoneOffsetMinutes(dtf, civilUtcMs);
+  const aroundUtcMs = civilUtcMs - rough * 60_000;
+  const valid = validOffsetCandidates(dtf, civilUtcMs, aroundUtcMs, year, month, day, hour, minute);
+  if (valid.length === 1) return valid[0].offsetMinutes;
+  if (valid.length > 1) {
+    let earliest = valid[0];
+    for (const candidate of valid) {
+      if (candidate.utcMs < earliest.utcMs) earliest = candidate;
+    }
+    return earliest.offsetMinutes;
+  }
+  return postTransitionOffsetForGap(dtf, aroundUtcMs, year, month, day, hour, minute) ?? rough;
 }
 
 /**
