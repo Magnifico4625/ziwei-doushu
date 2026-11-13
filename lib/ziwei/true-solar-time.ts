@@ -9,6 +9,7 @@
  *
  * 参考：https://gml.noaa.gov/grad/solcalc/solareqns.PDF
  */
+import { inferCityTimeZone } from './cities';
 import { isLeapGregorianYear, isValidGregorianDate } from './gregorian-date';
 
 export { isValidGregorianDate };
@@ -65,37 +66,19 @@ const mod = (value: number, base: number) => ((value % base) + base) % base;
 
 const dtfCache = new Map<string, Intl.DateTimeFormat>();
 
-interface KnownOverseasZone {
-  longitude: number;
-  defaultUtcOffsetMinutes: number;
-  timeZone: string;
-}
+/** 在已解析时刻附近取样，用来发现秋令拨回时的另一个合法偏移。 */
+const OVERLAP_PROBE_MINUTES = [-180, -120, -90, -60, -30, 30, 60, 90, 120, 180] as const;
 
-const KNOWN_OVERSEAS_CITY_TIMEZONES: readonly KnownOverseasZone[] = [
-  { longitude: 37.6, defaultUtcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-  { longitude: 30.3, defaultUtcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-  { longitude: 60.6, defaultUtcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
-  { longitude: 82.9, defaultUtcOffsetMinutes: 420, timeZone: 'Asia/Novosibirsk' },
-  { longitude: 131.9, defaultUtcOffsetMinutes: 600, timeZone: 'Asia/Vladivostok' },
-  { longitude: 76.9, defaultUtcOffsetMinutes: 300, timeZone: 'Asia/Almaty' },
-  { longitude: 27.6, defaultUtcOffsetMinutes: 180, timeZone: 'Europe/Minsk' },
-  { longitude: 139.7, defaultUtcOffsetMinutes: 540, timeZone: 'Asia/Tokyo' },
-  { longitude: 127.0, defaultUtcOffsetMinutes: 540, timeZone: 'Asia/Seoul' },
-  { longitude: 103.8, defaultUtcOffsetMinutes: 480, timeZone: 'Asia/Singapore' },
-  { longitude: 101.7, defaultUtcOffsetMinutes: 480, timeZone: 'Asia/Kuala_Lumpur' },
-  { longitude: 100.5, defaultUtcOffsetMinutes: 420, timeZone: 'Asia/Bangkok' },
-  { longitude: 77.2, defaultUtcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
-  { longitude: 72.8, defaultUtcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
-  { longitude: -0.1, defaultUtcOffsetMinutes: 0, timeZone: 'Europe/London' },
-  { longitude: 2.3, defaultUtcOffsetMinutes: 60, timeZone: 'Europe/Paris' },
-  { longitude: 13.4, defaultUtcOffsetMinutes: 60, timeZone: 'Europe/Berlin' },
-  { longitude: -74.0, defaultUtcOffsetMinutes: -300, timeZone: 'America/New_York' },
-  { longitude: -118.2, defaultUtcOffsetMinutes: -480, timeZone: 'America/Los_Angeles' },
-  { longitude: -79.4, defaultUtcOffsetMinutes: -300, timeZone: 'America/Toronto' },
-  { longitude: -123.1, defaultUtcOffsetMinutes: -480, timeZone: 'America/Vancouver' },
-  { longitude: 151.2, defaultUtcOffsetMinutes: 600, timeZone: 'Australia/Sydney' },
-  { longitude: 145.0, defaultUtcOffsetMinutes: 600, timeZone: 'Australia/Melbourne' },
-];
+export type ZoneLocalTimeKind = 'regular' | 'gap' | 'overlap';
+
+interface ZoneInstantReading {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  offsetMinutes: number;
+}
 
 /** 校验 UTC 偏移分钟数是否为 [-720, 840] 范围内的整数。 */
 export function isValidUtcOffsetMinutes(value: unknown): value is number {
@@ -142,9 +125,164 @@ export function isValidTimeZone(timeZone: unknown): timeZone is string {
   return typeof timeZone === 'string' && getZoneFormatter(timeZone) !== undefined;
 }
 
+function readZoneInstant(dtf: Intl.DateTimeFormat, utcMs: number): ZoneInstantReading {
+  const parts = dtf.formatToParts(new Date(utcMs));
+  const vals: Record<string, number> = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') vals[p.type] = Number(p.value);
+  }
+  const year = vals.year;
+  const month = vals.month ?? 1;
+  const day = vals.day ?? 1;
+  const hour = vals.hour ?? 0;
+  const minute = vals.minute ?? 0;
+  const second = vals.second ?? 0;
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    offsetMinutes: Math.round((asUtc - utcMs) / 60_000),
+  };
+}
+
+function sameCivilMinute(
+  reading: ZoneInstantReading,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): boolean {
+  return reading.year === year
+    && reading.month === month
+    && reading.day === day
+    && reading.hour === hour
+    && reading.minute === minute;
+}
+
+function clampClock(clockHour: number, clockMinute: number): { hour: number; minute: number } {
+  const hour = Number.isFinite(clockHour) ? Math.min(23, Math.max(0, Math.floor(clockHour))) : 12;
+  const minute = Number.isFinite(clockMinute) ? Math.min(59, Math.max(0, Math.floor(clockMinute))) : 0;
+  return { hour, minute };
+}
+
+function civilAsUtcMs(year: number, month: number, day: number, hour: number, minute: number): number {
+  return Date.UTC(year, month - 1, day, hour, minute, 0);
+}
+
+/** 先把当地钟点当成 UTC，迭代两次，得到落在真实瞬间附近的偏移。普通时刻这就是答案；切换日还要再消歧。 */
+function approximateZoneOffsetMinutes(dtf: Intl.DateTimeFormat, civilUtcMs: number): number {
+  const o1 = readZoneInstant(dtf, civilUtcMs).offsetMinutes;
+  const o2 = readZoneInstant(dtf, civilUtcMs - o1 * 60_000).offsetMinutes;
+  return readZoneInstant(dtf, civilUtcMs - o2 * 60_000).offsetMinutes;
+}
+
+interface OffsetCandidate {
+  offsetMinutes: number;
+  utcMs: number;
+}
+
+/**
+ * 在近似瞬间附近收集能把该当地钟点往返还原的偏移。
+ * 一个 = 普通时刻，两个 = 秋令重叠。春令跳空一个都没有。
+ */
+function validOffsetCandidates(
+  dtf: Intl.DateTimeFormat,
+  civilUtcMs: number,
+  aroundUtcMs: number,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): OffsetCandidate[] {
+  const seen = new Set<number>();
+  const valid: OffsetCandidate[] = [];
+  for (let deltaMin = -180; deltaMin <= 180; deltaMin += 30) {
+    const probe = readZoneInstant(dtf, aroundUtcMs + deltaMin * 60_000);
+    if (seen.has(probe.offsetMinutes)) continue;
+    seen.add(probe.offsetMinutes);
+    const utcMs = civilUtcMs - probe.offsetMinutes * 60_000;
+    const back = readZoneInstant(dtf, utcMs);
+    if (!sameCivilMinute(back, year, month, day, hour, minute)) continue;
+    valid.push({ offsetMinutes: probe.offsetMinutes, utcMs });
+  }
+  return valid;
+}
+
+function pinpointOffsetChange(
+  dtf: Intl.DateTimeFormat,
+  loMs: number,
+  hiMs: number,
+): { instantMs: number; before: number; after: number } {
+  let before = readZoneInstant(dtf, loMs).offsetMinutes;
+  let lo = loMs;
+  let hi = hiMs;
+  while (hi - lo > 1000) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (readZoneInstant(dtf, mid).offsetMinutes === before) lo = mid;
+    else hi = mid;
+  }
+  return {
+    instantMs: hi,
+    before,
+    after: readZoneInstant(dtf, hi).offsetMinutes,
+  };
+}
+
+/**
+ * 春令跳空：当地钟点落在「拨快」跳过的区间里时，返回过渡之后的偏移。
+ * 与南北半球无关——只看偏移变大（当地时钟往前跳）的那一次过渡。
+ */
+function postTransitionOffsetForGap(
+  dtf: Intl.DateTimeFormat,
+  aroundUtcMs: number,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): number | undefined {
+  const requested = civilAsUtcMs(year, month, day, hour, minute);
+  const windowMs = 8 * 60 * 60_000;
+  const stepMs = 20 * 60_000;
+  const start = aroundUtcMs - windowMs;
+  let prevMs = start;
+  let prevOffset = readZoneInstant(dtf, start).offsetMinutes;
+  for (let t = start + stepMs; t <= aroundUtcMs + windowMs; t += stepMs) {
+    const offset = readZoneInstant(dtf, t).offsetMinutes;
+    if (offset !== prevOffset) {
+      const change = pinpointOffsetChange(dtf, prevMs, t);
+      if (change.after > change.before) {
+        const beforeWall = readZoneInstant(dtf, change.instantMs - 1000);
+        const afterWall = readZoneInstant(dtf, change.instantMs);
+        const beforeCivil = civilAsUtcMs(beforeWall.year, beforeWall.month, beforeWall.day, beforeWall.hour, beforeWall.minute);
+        const afterCivil = civilAsUtcMs(afterWall.year, afterWall.month, afterWall.day, afterWall.hour, afterWall.minute);
+        if (requested > beforeCivil && requested < afterCivil) return change.after;
+      }
+    }
+    prevOffset = offset;
+    prevMs = t;
+  }
+  return undefined;
+}
+
 /**
  * 解析指定 IANA 时区在给定当地公历日期与时刻的 UTC 偏移（分钟），
  * 自动包含历史夏令时（DST）与时区改革（如俄罗斯 2011–2014 永久夏令时）。
+ *
+ * 消歧与 Temporal `disambiguation: 'compatible'` 相同，不看南北半球、也不看经度正负：
+ * - 当地时间不存在（春令拨快跳过的那段）：用过渡之后的偏移。
+ * - 当地时间出现两次（秋令拨回重叠的那段）：用较早一次的偏移（过渡前的那一侧）。
+ * - 普通时刻：用唯一能往返还原的偏移。
+ *
+ * 例如纽约 2024-03-10 02:30（不存在）为 UTC−4，伦敦 2024-03-31 01:30 为 UTC+1，
+ * 莫斯科 2011-03-27 02:30 为 UTC+4，悉尼 2024-10-06 02:30 为 UTC+11；
+ * 纽约 2024-11-03 01:30（出现两次）为较早的 UTC−4，伦敦 2024-10-27 01:30 为 UTC+1，
+ * 莫斯科 2014-10-26 01:30 为 UTC+4，悉尼 2024-04-07 02:30 为 UTC+11。
  */
 export function resolveTimeZoneOffsetMinutes(
   timeZone: string,
@@ -158,39 +296,58 @@ export function resolveTimeZoneOffsetMinutes(
   const dtf = getZoneFormatter(timeZone);
   if (!dtf) return undefined;
 
-  const h = Number.isFinite(clockHour) ? Math.min(23, Math.max(0, Math.floor(clockHour))) : 12;
-  const mi = Number.isFinite(clockMinute) ? Math.min(59, Math.max(0, Math.floor(clockMinute))) : 0;
-  const approxUtcMs = Date.UTC(year, month - 1, day, h, mi, 0);
-
-  const offsetAt = (utcMs: number): number => {
-    const parts = dtf.formatToParts(new Date(utcMs));
-    const vals: Record<string, number> = {};
-    for (const p of parts) {
-      if (p.type !== 'literal') vals[p.type] = Number(p.value);
+  const { hour, minute } = clampClock(clockHour, clockMinute);
+  const civilUtcMs = civilAsUtcMs(year, month, day, hour, minute);
+  const rough = approximateZoneOffsetMinutes(dtf, civilUtcMs);
+  const aroundUtcMs = civilUtcMs - rough * 60_000;
+  const valid = validOffsetCandidates(dtf, civilUtcMs, aroundUtcMs, year, month, day, hour, minute);
+  if (valid.length === 1) return valid[0].offsetMinutes;
+  if (valid.length > 1) {
+    let earliest = valid[0];
+    for (const candidate of valid) {
+      if (candidate.utcMs < earliest.utcMs) earliest = candidate;
     }
-    const asUtc = Date.UTC(
-      vals.year,
-      (vals.month ?? 1) - 1,
-      vals.day ?? 1,
-      vals.hour ?? 0,
-      vals.minute ?? 0,
-      vals.second ?? 0,
-    );
-    return Math.round((asUtc - utcMs) / 60_000);
-  };
+    return earliest.offsetMinutes;
+  }
+  return postTransitionOffsetForGap(dtf, aroundUtcMs, year, month, day, hour, minute) ?? rough;
+}
 
-  const o1 = offsetAt(approxUtcMs);
-  const o2 = offsetAt(approxUtcMs - o1 * 60_000);
-  return offsetAt(approxUtcMs - o2 * 60_000);
+/**
+ * 判断当地钟点在该 IANA 时区是普通时刻、春令跳空（不存在）还是秋令重叠（出现两次）。
+ * 偏移仍以 `resolveTimeZoneOffsetMinutes` 为准；这里只给表单做非拦截提示。
+ */
+export function classifyZoneLocalTime(
+  timeZone: string,
+  year: number,
+  month: number,
+  day: number,
+  clockHour = 12,
+  clockMinute = 0,
+): ZoneLocalTimeKind | undefined {
+  const offset = resolveTimeZoneOffsetMinutes(timeZone, year, month, day, clockHour, clockMinute);
+  if (offset === undefined) return undefined;
+  const dtf = getZoneFormatter(timeZone);
+  if (!dtf) return undefined;
+
+  const { hour, minute } = clampClock(clockHour, clockMinute);
+  const civilAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+  const resolved = readZoneInstant(dtf, civilAsUtc - offset * 60_000);
+  if (!sameCivilMinute(resolved, year, month, day, hour, minute)) return 'gap';
+
+  const seen = new Set<number>([offset]);
+  for (const delta of OVERLAP_PROBE_MINUTES) {
+    const probe = readZoneInstant(dtf, civilAsUtc - offset * 60_000 + delta * 60_000);
+    if (seen.has(probe.offsetMinutes)) continue;
+    seen.add(probe.offsetMinutes);
+    const candidate = readZoneInstant(dtf, civilAsUtc - probe.offsetMinutes * 60_000);
+    if (sameCivilMinute(candidate, year, month, day, hour, minute)) return 'overlap';
+  }
+  return 'regular';
 }
 
 function inferOverseasTimeZone(longitude?: number, utcOffsetMinutes?: number): string | undefined {
   if (!isValidLongitude(longitude) || !isValidUtcOffsetMinutes(utcOffsetMinutes)) return undefined;
-  const hit = KNOWN_OVERSEAS_CITY_TIMEZONES.find(
-    (entry) => Math.abs(entry.longitude - longitude) < 1e-6
-      && entry.defaultUtcOffsetMinutes === utcOffsetMinutes,
-  );
-  return hit?.timeZone;
+  return inferCityTimeZone(longitude, utcOffsetMinutes);
 }
 
 /** 由 UTC 偏移分钟数换算该时区的标准经线度数（东经为正，西经为负；1° = 4 分钟，归一化至 [-180°, 180°]）。 */

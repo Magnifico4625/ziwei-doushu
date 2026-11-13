@@ -26,6 +26,7 @@
     "react-dom": "^19.2.5"
   },
   "devDependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
