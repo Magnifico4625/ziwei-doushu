@@ -292,7 +292,7 @@ npm run dev
 
 ```bash
 npm run typecheck   # TypeScript 全量类型检查
-npm test            # 排盘引擎回归（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化）
+npm test            # 16 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析）
 ```
 
 每次 push 与 PR 都会在 GitHub Actions 上跑同一套（见 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)）。
@@ -303,13 +303,13 @@ npm test            # 排盘引擎回归（768 盘 × 紫微铁律、夏令时�
 
 ## 四、排盘引擎
 
-排盘内核全部在 `lib/ziwei/`。
+排盘与确定性分析内核全部在 `lib/ziwei/`，已与界面组件完全解耦（`BirthFormState` 统一定义于 `lib/ziwei/types.ts`，`lib/ziwei/` 内零 `@/components/*` 依赖；核心排盘、真太阳时、合盘与命盘分析模块不依赖 `server-only`，可在 Next.js 与 headless Node/`tsx` 环境直接运行）。
 
 ### 4.1 能做到什么（与常见排盘库的差异）
 
 | 能力 | 说明 |
 |------|------|
-| **真太阳时校正** | 按出生地经度与时区标准经线算时差 + 均时差，支持海外 IANA 时区（含历史夏令时）与手动选择 `UTC-12`..`+14`（含 `UTC+5:30`），避免东西向差一个时辰。切换日消歧与 Temporal `compatible` 相同：不存在的钟点用过渡后的偏移，重复的钟点用较早一次的偏移 |
+| **真太阳时校正** | 按出生地经度与时区标准经线算时差 + 均时差，内置中国省市及 58 个海外/国际城市（覆盖俄罗斯全部 11 个标准时区及伏尔加格勒、独联体与全球枢纽），支持海外 IANA 时区（含历史夏令时）与手动选择 `UTC-12`..`+14`（含 `UTC+5:30`），避免东西向差一个时辰。切换日消歧与 Temporal `compatible` 相同：不存在的钟点用过渡后的偏移，重复的钟点用较早一次的偏移 |
 | **中国夏令时** | 按通行排盘表（不是 IANA）判定 1935–1991 年间指定夏令时区间，并在表单提示（一键减 1 小时，不静默改时间）。与 IANA `Asia/Shanghai` 的差别见下文 |
 | **闰月四种口径** | 闰月归前月 / 归后月 / 按日切分 / 按本月，可配置，不写死一派 |
 | **晚子时换日** | 填写出生地/时区时按真太阳时 23:00–23:59 判晚子时并进位次日（真太阳时已过 00:00 属次日早子时）；未填出生地时按钟表 23:00–23:59；换日策略可切换 |
@@ -318,6 +318,8 @@ npm test            # 排盘引擎回归（768 盘 × 紫微铁律、夏令时�
 | **四化与飞星** | 生年四化、大限 / 流年四化、飞星自化 |
 | **十二神煞** | 本命层按生年支起，流年层改按流年支起 |
 | **格局判定** | 1100+ 行规则库（紫府同宫、日月并明、七杀朝斗等） |
+| **确定性合盘引擎** | `heming.ts`（零 LLM）：跨盘飞星四化（`yearStem` 及可选 `mingStem`/`fuqiStem`）、夫妻宫/借星共振、地支六合/三合/六冲、可选流年叠加、0–100 评分与 `< 3 KB` 紧凑 prompt 载荷（`analyzeSynastry`、`buildSynastryPromptPayload`） |
+| **确定性命盘分析** | `chart-analyzer.ts`（零 LLM、无头可用）：规范命盘缓存键（`getChartCacheKey`）、高信号痛点提取（`extractChartPainPoints`：本命/自化/大限/流年化忌、双忌叠冲夹与重煞聚宫）、命身与三方四正摘要及 `< 3 KB` prompt 载荷（`buildChartPromptPayload`） |
 
 IANA 切换日只有一条规则，与南北半球、经度正负无关，等同 Temporal 的 `disambiguation: 'compatible'`：当地时间不存在（春令拨快跳过的那段）用过渡之后的偏移；当地时间出现两次（秋令拨回重叠的那段）用较早一次的偏移（过渡前那一侧）。例如纽约 2024-03-10 02:30（不存在）为 UTC−4，伦敦 2024-03-31 01:30 为 UTC+1，莫斯科 2011-03-27 02:30 为 UTC+4，悉尼 2024-10-06 02:30 为 UTC+11；纽约 2024-11-03 01:30（出现两次）为较早的 UTC−4，伦敦 2024-10-27 01:30 为 UTC+1，莫斯科 2014-10-26 01:30 为 UTC+4，悉尼 2024-04-07 02:30 为 UTC+11。表单会写明采用的偏移，不拦截。
 
@@ -332,8 +334,10 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 | `sihua.ts` | 四化飞星系统（禄权科忌），含各天干四化对照表 |
 | `patterns.ts` | **1100+ 行格局知识库**：紫府同宫、日月并明、七杀朝斗等经典格局判定规则 |
 | `heming-knowledge.ts` | 合盘方法论：倪师体系下双盘比对逻辑 |
-| `types.ts` | TypeScript 类型定义 |
-| `cities.ts` | 中国省市及海外/国际城市经纬度与 IANA 时区配置，用于真太阳时校正 |
+| `types.ts` | TypeScript 核心类型定义（含与 UI 解耦的 `BirthFormState`、`BirthInfo`、`ZiweiChart`） |
+| `cities.ts` | 中国省市及 58 个海外/国际城市（含俄罗斯全 11 时区及伏尔加格勒、独联体与全球主要城市）经纬度与 IANA 时区配置 |
+| `heming.ts` | 确定性合盘计算引擎（`analyzeSynastry`、`buildSynastryPromptPayload`）：跨盘飞星、夫妻宫共振、流年叠加与评分 |
+| `chart-analyzer.ts` | 确定性命盘分析器（`getChartCacheKey`、`extractChartPainPoints`、`buildChartPromptPayload`）：缓存键、痛点提取与紧凑载荷 |
 | `famous.ts` | 历史名人命盘示例数据 |
 | `school-data.ts` / `school-tables.generated.ts` / `school-config.ts` | 星曜亮度流派数据与对照表、闰月与晚子时口径配置 |
 | `shier-shen.ts` | 十二神煞（本命按生年支起、流年层按流年支起） |
@@ -391,7 +395,7 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 | ✅ **开源** | 排盘引擎（`lib/ziwei/`）、古籍公版原文（`lib/classics/`）、SEO 知识图谱（`lib/seo/`）、Demo 界面、51.8 万样本数据集、13 维解读数据集 v4.0 |
 | ❌ **不开源** | 断语库（`lib/ziwei/db-analysis.ts` 是占位，线上是上万行的 13 主题断语）、AI 解读 prompt、后端 API（`/api/interpret` 等）、用户系统（登录 / 会员 / 支付）、服务端安全（签名、防刷、水印）、部署配置 |
 
-如果你需要 AI 解读能力，可以参考 `lib/ziwei/patterns.ts` 和 `heming-knowledge.ts` 里的知识库，结合任意 LLM 自行构建 prompt。
+如果你需要 AI 解读能力，可以参考 `lib/ziwei/patterns.ts` 和 `heming-knowledge.ts` 里的知识库，或直接调用 `chart-analyzer.ts`（`buildChartPromptPayload`）与 `heming.ts`（`buildSynastryPromptPayload`）生成 `< 3 KB` 的结构化紧凑载荷，结合任意 LLM 自行构建 prompt。
 
 ---
 
