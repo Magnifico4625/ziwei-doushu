@@ -1,4 +1,3 @@
-import type { BirthFormState } from '@/components/BirthForm';
 import { findCityInfo, type CityInfo } from './cities';
 import { chinaDSTRange, chinaDSTSpan, isChinaDST } from './dst-cn';
 import { isValidGregorianDate } from './gregorian-date';
@@ -15,7 +14,7 @@ import {
   type LateZishiRule,
   type TrueSolarTimeResult,
 } from './true-solar-time';
-import type { BirthInfo } from './types';
+import type { BirthFormState, BirthInfo } from './types';
 
 export interface TrueSolarBranchOptions {
   year?: number;
