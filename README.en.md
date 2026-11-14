@@ -45,7 +45,7 @@ This repo is an open snapshot of the engine behind [metisziwei.com](https://meti
 
 | Feature | Notes |
 |---|---|
-| True solar time | Longitude offset plus the equation of time, supporting international cities with historical IANA time zones (DST-aware) and manual UTC offsets (`UTC-12` to `UTC+14`, including `UTC+5:30`). A transition uses Temporal `compatible`: a nonexistent local time takes the offset after the transition; a repeated local time takes the earlier offset |
+| True solar time | Longitude offset plus the equation of time, with 58 international hubs in `cities.ts` (covering all 11 Russian standard time zones plus `Europe/Volgograd`, CIS, and major global cities) with historical IANA time zones (DST-aware) and manual UTC offsets (`UTC-12` to `UTC+14`, including `UTC+5:30`). A transition uses Temporal `compatible`: a nonexistent local time takes the offset after the transition; a repeated local time takes the earlier offset |
 | China DST | The commonly used convention table in `dst-cn.ts` (not IANA) drives a birth-form warning and a one-click −1 hour control. The engine does not change the entered time. See the note below for how the table differs from IANA |
 | Leap months | Four configurable conventions (previous month / next month / split by day / same month) |
 | Late Zi hour | Determined by true solar time when a location/timezone is set (23:00–23:59 charts on the next day; 00:00–00:59 is early Zi on that solar day), or by clock hour when no location is given; switchable |
@@ -53,12 +53,14 @@ This repo is an open snapshot of the engine behind [metisziwei.com](https://meti
 | Four Transformations | Natal, decade (大限) and annual (流年) transformations, plus flying-star self-transformations |
 | Twelve spirits | Natal layer by year branch, annual layer by the annual branch |
 | Patterns | 1,100+ lines of pattern rules (紫府同宫, 日月并明, 七杀朝斗, …) |
+| Deterministic synastry | `heming.ts` (`analyzeSynastry`, `buildSynastryPromptPayload`): zero-LLM cross-chart Flying SiHua (`yearStem` + optional `mingStem`/`fuqiStem`), Life/Spouse palace & borrowed-star resonance, branch relations, optional annual overlay, 0–100 scoring, and `< 3 KB` compact LLM prompt payloads |
+| Deterministic chart analyzer | `chart-analyzer.ts` (`getChartCacheKey`, `extractChartPainPoints`, `buildChartPromptPayload`): zero-LLM canonical chart cache keys, Natal/Self/DaXian/LiuNian HuaJi & Sha-cluster pain-point extraction, Life/Body/SanFangSiZheng summaries, and `< 3 KB` compact LLM payloads |
 
 On an IANA transition there is one rule, independent of hemisphere and of the sign of longitude, matching Temporal `disambiguation: 'compatible'`. A nonexistent local time (the spring-forward gap) uses the offset after the transition. A repeated local time (the fall-back overlap) uses the earlier offset, the one from before the transition. Examples: New York 2024-03-10 02:30 (nonexistent) → UTC−4; London 2024-03-31 01:30 → UTC+1; Moscow 2011-03-27 02:30 → UTC+4; Sydney 2024-10-06 02:30 → UTC+11; New York 2024-11-03 01:30 (repeated) → the earlier UTC−4; London 2024-10-27 01:30 → UTC+1; Moscow 2014-10-26 01:30 → UTC+4; Sydney 2024-04-07 02:30 → UTC+11. The form names the offset it used and does not block the chart.
 
 The China DST table is the commonly used national table. IANA `Asia/Shanghai` also has 1919; 1935–1939, 1950–1961, 1974, 1975 and 1979 are in the table and absent from IANA; the 1940s differ; 1988 starts on 10 April in the table and 17 April in IANA. The warning follows the table.
 
-Engine code lives in `lib/ziwei/` (entry point: `generateChart()` in `algorithm.ts`). Inputs are a **Gregorian** date and an **hour branch index 0–11** (子 = 0 … 亥 = 11), not a clock hour.
+Engine code lives in `lib/ziwei/` (entry point: `generateChart()` in `algorithm.ts`) and is decoupled from UI components (`BirthFormState` lives in `lib/ziwei/types.ts`, with zero `@/components/*` imports in `lib/ziwei/`). Core charting, geo, synastry (`heming.ts`), and chart analysis (`chart-analyzer.ts`) modules run headlessly in both Next.js and Node/`tsx`. Inputs are a **Gregorian** date and an **hour branch index 0–11** (子 = 0 … 亥 = 11), not a clock hour.
 
 ## Quick start
 
@@ -69,7 +71,7 @@ npm ci
 npm run dev          # charting demo at http://localhost:3000/chart
 
 npm run typecheck    # TypeScript check
-npm test             # charting regression tests
+npm test             # 16 regression suites (charting, DST, geo/cities, synastry, chart-analyzer)
 ```
 
 **No API key is needed for charting.** The open-source version contains **no backend routes**: AI interpretation (`/api/interpret`) and compatibility analysis (`/api/heming`) return 404 until you implement them yourself.
