@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { BirthInfo } from '@/lib/ziwei/types';
+import type { BirthFormState, BirthInfo } from '@/lib/ziwei/types';
 import { daysInGregorianMonth, isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { SHICHEN } from '@/lib/ziwei/constants';
 import {
@@ -25,21 +25,7 @@ import {
 import { useTheme } from '@/components/ThemeProvider';
 import { PROVINCES } from '@/lib/ziwei/cities';
 
-export interface BirthFormState {
-  name: string;
-  year: string;
-  month: string;
-  day: string;
-  clockHour: string;
-  clockMinute: string;
-  unknownTime: boolean;
-  province: string;
-  city: string;
-  longitude: number;
-  utcOffsetMinutes?: number;
-  timeZone?: string;
-  gender: 'male' | 'female';
-}
+export type { BirthFormState } from '@/lib/ziwei/types';
 
 interface BirthFormProps {
   onSubmit: (info: BirthInfo) => void;

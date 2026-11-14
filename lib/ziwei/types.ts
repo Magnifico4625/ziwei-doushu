@@ -25,6 +25,23 @@ export interface BirthInfo {
   };
 }
 
+/** 出生表单状态（由 UI 表单、URL 分享与历史记录共用） */
+export interface BirthFormState {
+  name: string;
+  year: string;
+  month: string;
+  day: string;
+  clockHour: string;
+  clockMinute: string;
+  unknownTime: boolean;
+  province: string;
+  city: string;
+  longitude: number;
+  utcOffsetMinutes?: number;
+  timeZone?: string;
+  gender: 'male' | 'female';
+}
+
 export interface LunarInfo {
   lunarYear: number;
   lunarMonth: number;    // positive = normal, negative = leap month
