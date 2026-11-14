@@ -281,7 +281,7 @@ cd ziwei-doushu
 # 安装依赖
 npm install
 
-# 配置环境变量（只看排盘可以跳过；AI 配置仅在你自己实现了 /api/* 接口时才用得上）
+# 配置环境变量（只看纯前端排盘可跳过；启用 /api/interpret、/api/heming、付费守卫或持久化缓存时按需填写）
 cp .env.example .env.local
 
 # 启动开发服务器
@@ -292,12 +292,18 @@ npm run dev
 
 ```bash
 npm run typecheck   # TypeScript 全量类型检查
-npm test            # 16 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析）
+npm test            # 18 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析、服务端基础设施与 API 路由）
 ```
 
 每次 push 与 PR 都会在 GitHub Actions 上跑同一套（见 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)）。
 
-> **注意：开源版不含后端 API 路由。**排盘、命盘展示、合盘起盘都在浏览器里用本仓库的引擎完成，**不需要任何 API Key**。AI 解读（`/api/interpret`）和合盘 AI 分析（`/api/heming`）需要你自己实现接口；没实现之前，这两处会直接提示「开源版不含该接口」，配置 API Key 也不会变成可用（#30 就是这个原因）。
+> **关于后端 API 路由与零 LLM 架构：**
+> - 纯前端排盘、命盘展示、合盘起盘依旧在浏览器里用本仓库的引擎完成，**不需要任何 API Key 或数据库**。
+> - 本仓库现已内置 Next.js App Router 后端路由（`app/api/`）与服务端基础设施（`lib/server/`、`db/schema.sql`）：
+>   - `GET /api/health`：检查 PostgreSQL 与 Redis 健康状态（未配置 `DATABASE_URL` / `REDIS_URL` 时自动降级为内存模式），返回非敏感配置（`aiProvider`、`paywallMode`）。
+>   - `POST /api/chart`：**零 LLM（Zero-LLM，$0 AI 成本）** 预检与免费排盘接口，支持本命盘与双盘合盘预览、痛点提取、格局判定与缓存检测，绝不导入或调用大模型。
+>   - `POST /api/billing/webhook`：通过 `PAYWALL_WEBHOOK_SECRET` 校验 HMAC-SHA256 签名（`timingSafeEqual`），对 `webhook_events` / `orders` 幂等落库，并在 `status === 'paid'` 时签发 HMAC `accessToken`。
+>   - `POST /api/interpret` 与 `POST /api/heming`：默认开启严格付费守卫 `AI_PAYWALL_MODE=strict`（在读取付费缓存或调用 LLM 之前拦截未授权请求并返回 `402 PAYWALL_LOCKED`），内置 IP 限流、Redis + PostgreSQL 双层缓存（含内存降级）与 SSE 流式输出（支持 `deepseek`、`anthropic`、`mimo`、`openai-compatible`）。本地开发免付费联调 AI 时，可在 `.env.local` 中设置 `AI_PAYWALL_MODE=off` 与对应模型 Key。
 
 ---
 
@@ -384,7 +390,7 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 
 **Demo 能跑通的**：出生信息表单、命盘方格与宫位详情、本命 / 大限 / 流年切换、古籍阅读器（全文搜索）、命理百科（14 主星 × 12 宫位）、亮暗主题、移动端适配。
 
-**Demo 里没有的**：线上重做过的交互界面、AI 流式解读、合盘图谱、分享卡片，以及**断语内容本身**（`db-analysis.ts` 是占位实现）。也就是说，Demo 画得出盘，但给不出线上那套解读。
+**Demo 里没有的**：线上商业版重做过的交互界面、商业版合盘图谱与分享卡片、线上专有断语库与运营配置，以及**本地静态断语内容本身**（`db-analysis.ts` 是占位实现）。也就是说，Demo 画得出盘并可通过配置 `/api/interpret` 与 `/api/heming` 接入大模型流式解读，但给不出线上那套静态断语库。
 
 ---
 
@@ -392,10 +398,10 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 
 | | 内容 |
 |---|---|
-| ✅ **开源** | 排盘引擎（`lib/ziwei/`）、古籍公版原文（`lib/classics/`）、SEO 知识图谱（`lib/seo/`）、Demo 界面、51.8 万样本数据集、13 维解读数据集 v4.0 |
-| ❌ **不开源** | 断语库（`lib/ziwei/db-analysis.ts` 是占位，线上是上万行的 13 主题断语）、AI 解读 prompt、后端 API（`/api/interpret` 等）、用户系统（登录 / 会员 / 支付）、服务端安全（签名、防刷、水印）、部署配置 |
+| ✅ **开源** | 排盘引擎（`lib/ziwei/`）、服务端基础设施与 API 路由（`lib/server/`、`app/api/`、`db/schema.sql`：含健康检查、零 LLM `/api/chart`、HMAC 支付回调 `/api/billing/webhook`、严格付费守卫 `AI_PAYWALL_MODE`、限流、Redis/PostgreSQL 缓存及多模型 SSE 流式输出 `/api/interpret` 与 `/api/heming`）、古籍公版原文（`lib/classics/`）、SEO 知识图谱（`lib/seo/`）、Demo 界面、51.8 万样本数据集、13 维解读数据集 v4.0 |
+| ❌ **不开源** | 断语库（`lib/ziwei/db-analysis.ts` 是占位，线上是上万行的 13 主题断语）、线上商业版专有提示词与完整前端界面、商户支付网关对接 / 用户账号体系、线上水印与生产环境部署密钥 |
 
-如果你需要 AI 解读能力，可以参考 `lib/ziwei/patterns.ts` 和 `heming-knowledge.ts` 里的知识库，或直接调用 `chart-analyzer.ts`（`buildChartPromptPayload`）与 `heming.ts`（`buildSynastryPromptPayload`）生成 `< 3 KB` 的结构化紧凑载荷，结合任意 LLM 自行构建 prompt。
+你可以直接启用仓库内置的 `/api/interpret` 与 `/api/heming` SSE 路由（由 `lib/server/llm.ts` 结合 `chart-analyzer.ts` 的 `buildChartPromptPayload` 与 `heming.ts` 的 `buildSynastryPromptPayload` 生成 `< 3 KB` 紧凑载荷），也可以参考 `lib/ziwei/patterns.ts` 和 `heming-knowledge.ts` 自行扩展 prompt。
 
 ---
 
@@ -415,7 +421,7 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 
 | 内容 | 协议 | 简单说 |
 |------|------|--------|
-| **代码**（`lib/`、`app/`、`components/`） | [MIT License](./LICENSE) | 拿去随便用，保留 LICENSE 文件即可 |
+| **代码**（`lib/`、`app/`、`components/`、`db/`） | [MIT License](./LICENSE) | 拿去随便用，保留 LICENSE 文件即可 |
 | **数据**（Releases 中的 51.8 万样本数据集 v3.0、13 维解读数据集 v4.0） | [CC BY 4.0](./DATASET-LICENSE) · 要求 attribution | 商用也行，**注明数据来源即可** |
 | **古籍原文**（骨髓赋、紫微斗数全集 / 全书等） | Public Domain | 古书都是公有领域，不存在版权 |
 | **倪师原话**（[`docs/tianji-ziwei/`](./docs/tianji-ziwei/)） | [CC BY-NC-SA 4.0](./docs/tianji-ziwei/LICENSE.md) | 可以引用、转载，注明出处；**不许商用**，改编后用同样协议 |
@@ -437,6 +443,7 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 - **样式**：Tailwind CSS + CSS Variables 设计系统
 - **排盘**：基于 [iztro](https://github.com/SylarLong/iztro) + lunar-javascript
 - **动画**：Framer Motion
+- **后端与存储**：Next.js Route Handlers（SSE 流式输出）、PostgreSQL（`pg`）+ Redis（`ioredis`，含内存降级）
 
 ### 联系
 

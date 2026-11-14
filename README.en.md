@@ -71,14 +71,19 @@ npm ci
 npm run dev          # charting demo at http://localhost:3000/chart
 
 npm run typecheck    # TypeScript check
-npm test             # 16 regression suites (charting, DST, geo/cities, synastry, chart-analyzer)
+npm test             # 18 regression suites (charting, DST, geo/cities, synastry, chart-analyzer, server-infra, api-routes)
 ```
 
-**No API key is needed for charting.** The open-source version contains **no backend routes**: AI interpretation (`/api/interpret`) and compatibility analysis (`/api/heming`) return 404 until you implement them yourself.
+**No API key or database is needed for charting.** Backend API routes (`app/api/`) and server infrastructure (`lib/server/`, `db/schema.sql`) are now included:
+
+- `GET /api/health` — checks PostgreSQL & Redis health (auto-falling back to in-memory mode when `DATABASE_URL` / `REDIS_URL` are unset) and exposes non-secret `aiProvider` / `paywallMode`.
+- `POST /api/chart` — **Zero-LLM ($0 AI cost)** charting & pre-paywall analysis endpoint (natal & synastry preview, pain-point extraction, pattern detection, and cache lookup; never imports `llm.ts`).
+- `POST /api/billing/webhook` — verifies HMAC-SHA256 signatures (`timingSafeEqual`), persists `webhook_events` / `orders` idempotently, and signs HMAC `accessToken`s for `paid` events.
+- `POST /api/interpret` & `POST /api/heming` — enforce strict paywall gating by default (`AI_PAYWALL_MODE=strict`, returning `402 PAYWALL_LOCKED` before checking paid cache or calling any LLM), apply IP rate limiting, cache responses in Redis + PostgreSQL (with in-memory fallback), and stream SSE across `deepseek`, `anthropic`, `mimo`, and `openai-compatible` providers. Copy `.env.example` to `.env.local` and set `AI_PAYWALL_MODE=off` plus a provider key for local non-billed AI testing.
 
 ## What is not included
 
-The interpretation database (`lib/ziwei/db-analysis.ts` is a placeholder), AI prompts, all `/api/*` backend routes, user accounts, payments, and deployment configuration.
+The proprietary 13-topic interpretation database (`lib/ziwei/db-analysis.ts` is a placeholder), production commercial prompts and full commercial frontend UI, payment-gateway merchant integrations/user accounts, and production deployment secrets.
 
 ## Interpretation dataset v4.0 (674,976 charts × 13 topics, 2026-10-15)
 
@@ -117,7 +122,7 @@ Lunar dates are a separate calendar. A lunar month may have 30 days, and leap lu
 
 | Part | License |
 |---|---|
-| Code (`lib/`, `app/`, `components/`) | [MIT](./LICENSE) |
+| Code (`lib/`, `app/`, `components/`, `db/`) | [MIT](./LICENSE) |
 | Sample dataset (Releases) | [CC BY 4.0](./DATASET-LICENSE): commercial use OK with attribution |
 | Classical texts | Public domain |
 | Ni Haixia quotes (`docs/tianji-ziwei/`) | [CC BY-NC-SA 4.0](./docs/tianji-ziwei/LICENSE.md): **non-commercial only** |
