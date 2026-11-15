@@ -3,7 +3,7 @@
  *
  * 设计原则：
  * 1. 古书条件优先：每个格局列出"必须 / 加分 / 破格"三层结构，出处可考
- * 2. 倪师立场：不使用宫干自化、大限四化、来因宫等飞星派工具
+ * 2. 三合古法：立足本命星曜格局与三方四正会照，不依赖宫干自化、大限四化或来因宫
  * 3. 庙旺利陷：用 brightness 字段（bright=庙旺、normal=平、dim=陷）
  * 4. 三方四正会照：命宫 + 财帛 + 官禄 + 迁移
  * 5. 夹宫：命宫前后两宫
@@ -12,10 +12,8 @@
  *  - 《紫微斗数全集》（陈抟祖师传，明代刊本）
  *  - 《紫微斗数全书》（罗洪先编，明代刊本）
  *  - 《骨髓赋》《女命骨髓赋》《十二宫诸星得地合格诀》
- *  - 倪师《天纪》紫微斗数讲义
  */
 
-import 'server-only';
 import type { ZiweiChart, Palace, Star } from './types';
 
 // ────────────────── 类型 ──────────────────
@@ -850,7 +848,7 @@ function detectLuCunShouShen(chart: ZiweiChart, patterns: Pattern[]) {
     level: 'good',
     description: inMing
       ? '禄存坐命，主一生衣食无忧、财禄稳定。性格保守，善积累，但羊陀夹禄须防小人。最宜配化禄、左辅右弼方为大格。'
-      : '禄存入身宫，主中年后财源稳定、得禄自享。倪师说「禄存入身，财气近身」——配偶或事业方向能带来稳定财禄。',
+      : '禄存入身宫，主中年后财源稳定、得禄自享。禄星临身主财气相随，常因配偶助力或稳健实业方向而积累稳定财禄。',
     palaces: [inMing ? '命宫' : '身宫'],
     conditions: { required: [inMing ? '禄存入命宫' : '禄存入身宫'] },
     source: '《紫微斗数全书·禄存星》',
@@ -868,7 +866,7 @@ function detectTianMaRuMing(chart: ZiweiChart, patterns: Pattern[]) {
     name: inMing ? '天马入命' : '天马在迁',
     level: 'neutral',
     description: inMing
-      ? '天马坐命，主一生奔波、动中得财，宜走商旅、外勤、跨界发展。倪师说「天马入命，无禄不发」——若再会禄存或化禄即「禄马交驰」之富格。'
+      ? '天马坐命，主一生奔波、动中得财，宜走商旅、外勤、跨界发展。古赋云“天马无禄则空奔”，若再会禄存或化禄即成「禄马交驰」之富格。'
       : '天马在迁移宫，主外出有利、远行得财，宜异乡发展。配化禄主异地生财，配煞星则旅途多波折。',
     palaces: [tianMaPalace.name],
     conditions: { required: [inMing ? '天马入命宫' : '天马入迁移宫'] },
@@ -885,7 +883,7 @@ function detectHuaLuRuCai(chart: ZiweiChart, patterns: Pattern[]) {
   patterns.push({
     name: '化禄入财',
     level: 'good',
-    description: `${luStar.name}化禄入财帛宫，主财源畅通、收入稳定。倪师讲化禄是「正财」象征——这个化禄星所代表的能力（${luStar.name}的核心特质）是你赚钱的主轴。配禄存或天马则财源更广。`,
+    description: `${luStar.name}化禄入财帛宫，主财源畅通、收入稳定。化禄主正财与顺遂生发——${luStar.name}所代表的特质与能力即为求财主轴，若再会禄存或天马则财源更广。`,
     palaces: ['财帛'],
     conditions: { required: [`${luStar.name}化禄入财帛宫`] },
     source: '《紫微斗数全书·四化论》',
@@ -920,7 +918,7 @@ function detectHuaKeRuMingShen(chart: ZiweiChart, patterns: Pattern[]) {
     patterns.push({
       name: isMing ? '化科入命' : '化科入身',
       level: 'good',
-      description: `${keStar.name}化科入${isMing ? '命' : '身'}宫，主名声、文书、学术运。倪师讲化科是「贵人星」——${keStar.name}化科带来的是被人看重的特质，宜从事文书、教育、研究、咨询、文创等“以名取利”的方向。`,
+      description: `${keStar.name}化科入${isMing ? '命' : '身'}宫，主名声、文书、学术运。化科为清誉与贵人助力之星，${keStar.name}化科赋予受人赏识的声望与专业特质，宜从事文书、教育、研究、咨询、文创等以声誉立业的方向。`,
       palaces: [isMing ? '命宫' : '身宫'],
       conditions: { required: [`${keStar.name}化科入${isMing ? '命' : '身'}宫`] },
       source: '《紫微斗数全书·四化论》',
@@ -973,7 +971,7 @@ function detectFuBiTongHui(chart: ZiweiChart, patterns: Pattern[]) {
   patterns.push({
     name: '辅弼同会',
     level: 'good',
-    description: '左辅右弼同会命宫三方四正，主一生贵人不绝、人缘极佳。最宜领导岗位与团队合作型工作。倪师说「辅弼夹命，平生贵人多」——你不是单打独斗的命，要善用人际网络。',
+    description: '左辅右弼同会命宫三方四正，主一生贵人不绝、人缘极佳，最宜统筹协调与团队协作型工作。古论云“辅弼同会，平生多助”，宜善用协作网络而非单打独斗。',
     palaces: ['命宫'],
     conditions: { required: ['左辅、右弼同会命宫三方四正'] },
     source: '《紫微斗数全书·辅弼论》',
@@ -987,7 +985,7 @@ function detectKuiYueTongHui(chart: ZiweiChart, patterns: Pattern[]) {
   patterns.push({
     name: '魁钺同会',
     level: 'good',
-    description: '天魁天钺同会命宫三方四正，主"天乙贵人"加持，关键时刻总有贵人提携。倪师说「魁钺夹命，必为贵人」——遇到困难时身边会出现得力相助者，宜主动维护人脉。',
+    description: '天魁天钺同会命宫三方四正，主天乙贵人加持，关键时刻常得长辈或贤达提携。逢阻滞时易遇得力相助者，宜主动维系良师益友之人脉。',
     palaces: ['命宫'],
     conditions: { required: ['天魁、天钺同会命宫三方四正'] },
     source: '《紫微斗数全书·魁钺论》',
