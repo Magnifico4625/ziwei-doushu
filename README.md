@@ -4,11 +4,11 @@
 
 ### 算法是公开的传统智慧，不应该被锁在围墙里
 
-[![CI](https://github.com/Renhuai123/ziwei-doushu/actions/workflows/ci.yml/badge.svg)](https://github.com/Renhuai123/ziwei-doushu/actions/workflows/ci.yml)
+[![CI](https://github.com/Magnifico4625/ziwei-doushu/actions/workflows/ci.yml/badge.svg)](https://github.com/Magnifico4625/ziwei-doushu/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](./LICENSE)
 [![Dataset: CC BY 4.0](https://img.shields.io/badge/dataset-CC%20BY%204.0-green.svg)](./DATASET-LICENSE)
 
-**中文** · [English](./README.en.md)
+**中文** · [English](./README.en.md) · [API 参考](./docs/API.md)
 
 </div>
 
@@ -38,7 +38,8 @@
 
 | | 章节 | 一句话 |
 |---|------|--------|
-| 一 | [本轮更新](#一本轮更新2026-10-15) | 13 维断语按倪师原话与《全书》逐句校正，发布 67.5 万命盘 × 13 维解读数据集 v4.0 |
+| 零 | [商业化引擎与后端演进（Stages 1-3）](#商业化引擎与后端演进stages-1-3) | 无头解耦、全时区 DST、确定性合盘/分析、三语 i18n、支付闭环、CORS 与商业化合规（见 [API 文档](./docs/API.md)） |
+| 一 | [本轮更新（上游 2026-10-15 基线）](#一本轮更新2026-10-15) | 13 维断语按倪师原话与《全书》逐句校正，发布 67.5 万命盘 × 13 维解读数据集 v4.0 |
 | 二·新 | [13 维解读数据集 v4.0](#二新13-维解读数据集-v402026-10-15) | 2026-10-15 新版断语，67.5 万命盘，按年份下载 |
 | 二 | [51.8 万命盘样本数据集](#二518-万命盘样本数据集) | 规格、下载、用途、许可 |
 | 三 | [快速开始](#三快速开始) | 克隆到跑起来 |
@@ -51,6 +52,14 @@
 | 十 | [关于与联系](#十关于与联系) | 项目理念、技术栈、联系方式 |
 
 ---
+
+## 商业化引擎与后端演进（Stages 1-3）
+
+基于上游引擎基线，本分支已完成三个阶段的商业化改造（完整 HTTP 与无头引擎契约见 [**`docs/API.md`**](./docs/API.md)）：
+
+- **Stage 1（无头引擎解耦与全球时区）**：将 `BirthFormState` 迁移至 `lib/ziwei/types.ts` 并移除 `lib/ziwei/` 对 `@/components/*` 的依赖；新增 `heming.ts`（确定性零 LLM 合盘与 `< 3 KB` prompt 载荷）、`chart-analyzer.ts`（`getChartCacheKey`、`extractChartPainPoints`、`buildChartPromptPayload`）以及覆盖全球与俄/独联体 11 个标准时区的 IANA 历史夏令时城市解析。
+- **Stage 2（服务端 API 与付费网关基础设施）**：新增 `db/schema.sql`、`lib/server/`（PostgreSQL/Redis 双写适配与内存降级、HS256 token 签发/HMAC webhook 验签、IP 限流、多模型 SSE 流式输出）及 `/api/health`、零 LLM `/api/chart`、`/api/billing/webhook`、严格守卫 `/api/interpret` 与 `/api/heming`。
+- **Stage 3（三语本地化、免费钩子、商用合规与支付闭环）**：新增 `lib/ziwei/i18n.ts`（`ru`/`zh`/`en`）与 `findCityByQuery` 多语言城市检索；扩展 `db-analysis.ts` 与 `paywall-teasers.ts` 提供零 LLM 免费 `命宫` 解读与多语言付费钩子；移除 `patterns.ts` / `famous.ts` 的 `server-only` 并清理全部 `lib/ziwei/`、`lib/server/`、`app/api/` 运行时中的非商用 `CC BY-NC-SA 4.0` / `ni_quote` 引文；新增 `POST /api/billing/checkout`、`GET /api/billing/order`、`ALLOWED_ORIGINS` CORS（`lib/server/cors.ts`）与按语言隔离的双层缓存（20 组回归测试 + `tsc --noEmit` + `npm run build` 全部通过）。
 
 ## 一、本轮更新（2026-10-15）
 
@@ -275,7 +284,7 @@ Expand-Archive combined.zip
 
 ```bash
 # 克隆
-git clone https://github.com/Renhuai123/ziwei-doushu.git
+git clone https://github.com/Magnifico4625/ziwei-doushu.git
 cd ziwei-doushu
 
 # 安装依赖
@@ -295,11 +304,12 @@ npm run typecheck             # TypeScript 全量类型检查
 npm test                      # 20 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析、服务端基础设施与 API 路由、三语 i18n/付费钩子/商用合规、商业化支付与多语言 API）
 npm run test:i18n-teasers-license   # 单独运行三语本地化、免费命宫与商用合规回归
 npm run test:stage3-commercial      # 单独运行支付闭环、CORS 与多语言后端 API 回归
+npm run build                 # Next.js 生产构建检查
 ```
 
 每次 push 与 PR 都会在 GitHub Actions 上跑同一套（见 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)）。
 
-> **关于后端 API 路由与零 LLM 架构：**
+> **关于后端 API 路由与零 LLM 架构（完整请求/响应契约见 [`docs/API.md`](./docs/API.md)）：**
 > - 纯前端排盘、命盘展示、合盘起盘依旧在浏览器里用本仓库的引擎完成，**不需要任何 API Key 或数据库**。
 > - 本仓库现已内置 Next.js App Router 后端路由（`app/api/`）与服务端基础设施（`lib/server/`、`db/schema.sql`），并默认启用多语言（`lang: 'ru' | 'zh' | 'en'`）与 `ALLOWED_ORIGINS` 跨域白名单（`lib/server/cors.ts`，所有 7 个 `/api/*` 路由均导出 `OPTIONS` 预检并用 `withCors` 包装响应）：
 >   - `GET /api/health`：检查 PostgreSQL 与 Redis 健康状态（未配置 `DATABASE_URL` / `REDIS_URL` 时自动降级为内存模式），返回非敏感配置（`aiProvider`、`paywallMode`）。
@@ -418,10 +428,10 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 
 ## 八、维护节奏与贡献
 
-这个仓库是**排盘引擎 + 数据集的开放快照**，不是一个全职维护的开源产品，说清楚免得大家猜：
+这个仓库在开放排盘引擎与数据集的基础上，现已补齐商业化无头内核与 Next.js API 后端基础设施：
 
-- **引擎同步**：随线上发版同步 `lib/ziwei/` 的引擎层并打 tag；断语库、AI 解读、商业站前端不在同步范围内。
-- **Issue**：会看，但回复可能不及时；带复现步骤或具体盘例（年月日时 + 性别 + 哪一条不对）的问题优先处理。
+- **引擎与后端范围**：`lib/ziwei/`（零 `@/components/*`、零 `server-only`、零 `CC BY-NC-SA 4.0` 运行时文本）、`lib/server/`、`app/api/` 与 `db/schema.sql` 均已完整内置并附带 20 条回归测试；外部专有 13 主题批量断语库与生产密钥不在仓库中（见 [API 文档](./docs/API.md)）。
+- **Issue**：欢迎提交；带复现步骤或具体盘例（年月日时 + 性别 + 哪一条不对）的问题优先处理。
 - **PR**：欢迎，尤其是回归测试、口径修正、文档。动到排盘口径的改动请附上依据（古籍原文或可核对的对照）。
 
 ---
@@ -454,10 +464,12 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 - **样式**：Tailwind CSS + CSS Variables 设计系统
 - **排盘**：基于 [iztro](https://github.com/SylarLong/iztro) + lunar-javascript
 - **动画**：Framer Motion
-- **后端与存储**：Next.js Route Handlers（SSE 流式输出）、PostgreSQL（`pg`）+ Redis（`ioredis`，含内存降级）
+- **后端与存储**：Next.js Route Handlers（SSE 流式输出、CORS 白名单 `ALLOWED_ORIGINS`、HMAC-SHA256 支付守卫）、PostgreSQL（`pg`）+ Redis（`ioredis`，含内存降级）
+- **测试**：`tsx`（20 条独立回归脚本）、`tsc --noEmit`
 
 ### 联系
 
-- 线上平台：[metisziwei.com](https://metisziwei.com/?from=gh-readme)（已完成 ICP 备案：渝ICP备2026013379号-1）
-- 提问题、提修复：见 [CONTRIBUTING.md](./CONTRIBUTING.md)；使用交流请到 [讨论区](https://github.com/Renhuai123/ziwei-doushu/discussions)
+- 后端集成文档：[`docs/API.md`](./docs/API.md)
+- 线上参考平台：[metisziwei.com](https://metisziwei.com/?from=gh-readme)（已完成 ICP 备案：渝ICP备2026013379号-1）
+- 提问题、提修复：见 [CONTRIBUTING.md](./CONTRIBUTING.md)；上游讨论请到 [Renhuai123/ziwei-doushu 讨论区](https://github.com/Renhuai123/ziwei-doushu/discussions)
 - 💕 发财的小手点一下：小红书 / 抖音 / 闲鱼 / X 关注 **王多鱼AI**，第一时间看上线 + 解锁更多紫微干货～

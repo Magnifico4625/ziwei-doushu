@@ -4,11 +4,11 @@
 
 ### Algorithms are openly shared traditional wisdom; they shouldn’t be locked behind walls.
 
-[![CI](https://github.com/Renhuai123/ziwei-doushu/actions/workflows/ci.yml/badge.svg)](https://github.com/Renhuai123/ziwei-doushu/actions/workflows/ci.yml)
+[![CI](https://github.com/Magnifico4625/ziwei-doushu/actions/workflows/ci.yml/badge.svg)](https://github.com/Magnifico4625/ziwei-doushu/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](./LICENSE)
 [![Dataset: CC BY 4.0](https://img.shields.io/badge/dataset-CC%20BY%204.0-green.svg)](./DATASET-LICENSE)
 
-[中文](./README.md) · **English**
+[中文](./README.md) · **English** · [API Reference](./docs/API.md)
 
 </div>
 
@@ -32,7 +32,15 @@ This repo is an open snapshot of the engine behind [metisziwei.com](https://meti
 >
 > Zi Wei Dou Shu has known limits when it comes to family relations (parents, siblings, children and so on). In *Tian Ji*, Master Ni Haixia said that "Dou Shu has always been somewhat weaker at reading family relations" ([lecture 2, part 1 · 00:25:27](https://www.bilibili.com/video/BV1KJsLekEfA?p=3&t=1527)). Among traditional methods, Tie Ban Shen Shu has its own strengths in checking family relations ([00:03:15](https://www.bilibili.com/video/BV1KJsLekEfA?p=3&t=195)); Master Ni still kept Zi Wei Dou Shu at the core because it can be read together with geography, surroundings and human affairs, forming a complete system that knows the heavens above, the earth below and human affairs in between ([00:25:43](https://www.bilibili.com/video/BV1KJsLekEfA?p=3&t=1543)). Readings about family relations are therefore for reference only; the Parents, Siblings and Children sections on [metisziwei.com](https://metisziwei.com/?from=gh-readme-en) carry the same note.
 
-## Latest update (2026-10-15)
+## Commercial Backend & Engine Evolution (Stages 1–3)
+
+Building on the upstream charting snapshot, this repository now ships a complete headless engine and commercial backend (see [**`docs/API.md`**](./docs/API.md) for exact HTTP and Node contracts):
+
+- **Stage 1 (Headless Engine Decoupling & Global Timezones)**: Moved `BirthFormState` into `lib/ziwei/types.ts` with zero `@/components/*` imports in `lib/ziwei/`; added `heming.ts` (zero-LLM cross-chart synastry + `< 3 KB` payloads), `chart-analyzer.ts` (`getChartCacheKey`, `extractChartPainPoints`, `buildChartPromptPayload`), and IANA historical DST coverage across all 11 Russian standard time zones plus CIS and global hubs.
+- **Stage 2 (Server Infrastructure & Paywall-Guarded AI APIs)**: Added `db/schema.sql`, `lib/server/` (PostgreSQL & Redis adapters with automatic in-memory fallback, HS256 token & HMAC webhook verification, IP rate limiting, multi-provider SSE streaming), plus `/api/health`, Zero-LLM `/api/chart`, `/api/billing/webhook`, and strict-paywalled `/api/interpret` & `/api/heming`.
+- **Stage 3 (Multilingual `ru`/`zh`/`en`, Zero-LLM Free Tier & Teasers, License Hygiene, Billing & CORS)**: Added `lib/ziwei/i18n.ts` and multilingual city lookup `findCityByQuery` in `cities.ts`; populated deterministic `命宫` free readings (`db-analysis.ts`) and paywall teasers (`paywall-teasers.ts`); removed `server-only` from `patterns.ts` & `famous.ts` and stripped all `CC BY-NC-SA 4.0` / `ni_quote` lecture quotes from runtime modules (`lib/ziwei/*`, `lib/server/*`, `app/api/*`); added `POST /api/billing/checkout`, `GET /api/billing/order`, `ALLOWED_ORIGINS` CORS (`lib/server/cors.ts`), and language-isolated caches while keeping entitlements language-agnostic (20 regression suites + `tsc --noEmit` + `npm run build` passing).
+
+## Upstream Baseline Update (2026-10-15)
 
 ![Update overview](./docs/update-20261015.png)
 
@@ -68,7 +76,7 @@ Engine code lives in `lib/ziwei/` (entry point: `generateChart()` in `algorithm.
 ## Quick start
 
 ```bash
-git clone https://github.com/Renhuai123/ziwei-doushu.git
+git clone https://github.com/Magnifico4625/ziwei-doushu.git
 cd ziwei-doushu
 npm ci
 npm run dev          # charting demo at http://localhost:3000/chart
@@ -77,9 +85,10 @@ npm run typecheck    # TypeScript check
 npm test             # 20 regression suites (charting, DST, geo/cities, synastry, chart-analyzer, server-infra, api-routes, i18n/teasers/license, stage3-commercial)
 npm run test:i18n-teasers-license
 npm run test:stage3-commercial
+npm run build        # Next.js production build verification
 ```
 
-**No API key or database is needed for charting.** Backend API routes (`app/api/`) and server infrastructure (`lib/server/`, `db/schema.sql`) are now included, with `'ru' | 'zh' | 'en'` localization and `ALLOWED_ORIGINS` CORS (`lib/server/cors.ts`, exporting `OPTIONS` and wrapping responses with `withCors` across all 7 `/api/*` routes):
+**No API key or database is needed for charting.** Backend API routes (`app/api/`) and server infrastructure (`lib/server/`, `db/schema.sql`) are now included (full JSON schemas in [`docs/API.md`](./docs/API.md)), with `'ru' | 'zh' | 'en'` localization and `ALLOWED_ORIGINS` CORS (`lib/server/cors.ts`, exporting `OPTIONS` and wrapping responses with `withCors` across all 7 `/api/*` routes):
 
 - `GET /api/health` — checks PostgreSQL & Redis health (auto-falling back to in-memory mode when `DATABASE_URL` / `REDIS_URL` are unset) and exposes non-secret `aiProvider` / `paywallMode`.
 - `POST /api/chart` — **Zero-LLM ($0 AI cost)** charting & pre-paywall analysis endpoint supporting `lang: 'ru' | 'zh' | 'en'`, multilingual city lookup via `findCityByQuery` (e.g., `"Москва"`), direct synchronous `detectPatterns(chart)`, deterministic `freeLifePalace` (`命宫` free reading), localized `teasers`, `localizedSummary`/`localizedPatterns`, and cache lookup (never imports `llm.ts`).
@@ -135,4 +144,4 @@ Lunar dates are a separate calendar. A lunar month may have 30 days, and leap lu
 | Classical texts | Public domain |
 | Ni Haixia quotes (`docs/tianji-ziwei/`) | [CC BY-NC-SA 4.0](./docs/tianji-ziwei/LICENSE.md): **non-commercial only** |
 
-Contributions are welcome. Please read [CONTRIBUTING.md](./CONTRIBUTING.md); questions go to [Discussions](https://github.com/Renhuai123/ziwei-doushu/discussions).
+Contributions are welcome. Please read [CONTRIBUTING.md](./CONTRIBUTING.md) and the backend contract in [docs/API.md](./docs/API.md); upstream discussions live at [Renhuai123/ziwei-doushu/discussions](https://github.com/Renhuai123/ziwei-doushu/discussions).
