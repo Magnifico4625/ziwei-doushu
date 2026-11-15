@@ -18,10 +18,15 @@ CREATE TABLE IF NOT EXISTS orders (
   amount_minor INTEGER,
   currency TEXT,
   provider TEXT,
+  checkout_url TEXT,
   meta JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  paid_at TIMESTAMPTZ
+  paid_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_url TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_orders_scope_target_status
   ON orders (scope, target_key, status);

@@ -8,6 +8,7 @@ import {
   buildSynastryPromptPayload,
   type SynastryResult,
 } from '../ziwei/heming';
+import { normalizeLang, type SupportedLang } from '../ziwei/i18n';
 import {
   getServerConfig,
   type AiProviderKind,
@@ -88,19 +89,58 @@ export function createSseFromCachedText(
 
 // ────────────────── Compact System Prompt Builders ──────────────────
 
+export interface BuildChartSystemPromptOptions {
+  targetYear?: number;
+  patterns?: readonly PatternSummary[];
+  lang?: SupportedLang;
+}
+
 /**
  * Build a compact, deterministic system prompt for single-chart Zi Wei Dou Shu
  * interpretation using Stage 1 `< 3 KB` chart payload serialization.
  */
 export function buildChartSystemPrompt(
   chart: ZiweiChart,
-  options?: { targetYear?: number; patterns?: readonly PatternSummary[] },
+  optionsOrLang?: BuildChartSystemPromptOptions | SupportedLang,
+  langArg?: SupportedLang,
 ): string {
+  const options: BuildChartSystemPromptOptions =
+    typeof optionsOrLang === 'string' ? { lang: optionsOrLang } : (optionsOrLang ?? {});
+  const lang = normalizeLang(langArg ?? options.lang, 'zh');
+
   const payload = buildChartPromptPayload(chart, {
-    targetYear: options?.targetYear,
-    patterns: options?.patterns,
+    targetYear: options.targetYear,
+    patterns: options.patterns,
   });
   const payloadJson = JSON.stringify(payload);
+
+  if (lang === 'ru') {
+    return [
+      'Ты — опытный профессиональный консультант по традиционной китайской астрологии Цзы Вэй Доу Шу (школы Сань-Хэ и Фэй-Син Сы-Хуа). Строго опирайся ТОЛЬКО на структурированные данные натальной карты в JSON ниже. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО выдумывать или дописывать звёзды, дворцы, уровни яркости или трансформации Сы-Хуа, которых нет в переданном JSON.',
+      '',
+      'Правила анализа:',
+      '1. Базовая структура карты: оцени Бюро Пяти Элементов (`wuxingJuName`), главные звёзды и их яркость (`庙`/`旺` — сильная позиция, `得`/`利` — устойчивая, `平` — нейтральная, `不`/`陷` — ослабленная) во Дворце Судьбы (Мин-гун) и Дворце Тела (Шэнь-гун), тригон Сань-Фан Сы-Чжэн (Мин, Цайбо, Гуаньлу, Цяньи), а также баланс шести благоприятных и шести ша-звёзд. Если дворец пустой (`borrowedFrom`), обязательно учитывай заимствование звёзд из противоположного дворца.',
+      '2. Потоки Четырёх Трансформаций (Сы-Хуа): проследи натальные Сы-Хуа, самотрансформации ствола дворца (`selfSihua`), текущий десятилетний такт (`daXian`) и годовой цикл (`liuNian`). Подробно разбери риски из `painPoints` (наложение и столкновение Хуа Цзи, концентрацию ша-звёзд) и свяжи их с выявленными классическими структурами `patterns`.',
+      '3. Терминология, язык и оформление: отвечай естественным, живым и грамотным литературным русским языком без машинных калек и фаталистического запугивания. Переводи и поясняй термины Цзы Вэй Доу Шу ясно (названия дворцов, звёзд, Хуа Лу — процветание, Хуа Цюань — власть и воля, Хуа Кэ — признание и репутация, Хуа Цзи — точка напряжения и проработки), давая конкретные практические рекомендации. Основные заголовки разделов выноси на отдельную строку в формате `**【Название раздела】**`, а ключевые выводы выделяй как `**важный акцент**`.',
+      '',
+      'Структурированные данные карты (JSON):',
+      payloadJson,
+    ].join('\n');
+  }
+
+  if (lang === 'en') {
+    return [
+      'You are a seasoned Zi Wei Dou Shu (San He & Flying-Star Si Hua) astrological consultant. Base your reading strictly on the structured natal chart JSON provided below. NEVER invent or assume stars, palaces, brightness levels, or Si Hua transformations that do not appear in the JSON.',
+      '',
+      'Analysis guidelines:',
+      '1. Core chart structure: examine the Five-Element Bureau (`wuxingJuName`), major stars and dignity (`庙`/`旺` bright, `得`/`利` supportive, `平` neutral, `不`/`陷` dim) in the Life Palace (Ming Gong) and Body Palace (Shen Gong), the San Fang Si Zheng axis (Life, Wealth, Career, Travel), and the interplay of lucky and sha stars. For empty palaces (`borrowedFrom`), explicitly interpret the stars borrowed from the opposite palace.',
+      '2. Four Transformations (Si Hua) dynamics: trace natal Si Hua, palace stem self-transformations (`selfSihua`), the active 10-year Da Xian (`daXian`), and annual Liu Nian (`liuNian`) triggers. Address every highlighted risk in `painPoints` (stacked or clashing Hua Ji, sha clusters) alongside the detected classical `patterns`.',
+      '3. Clarity & formatting: write in clear, natural, grounded English without fatalistic fearmongering, translating Zi Wei terms clearly (palaces, star archetypes, Hua Lu / Abundance, Hua Quan / Authority, Hua Ke / Recognition, Hua Ji / Friction & Focus) and offering actionable, constructive advice. Place major section headings on their own line using `**【Section Title】**` and highlight key takeaways in `**bold**`.',
+      '',
+      'Structured chart data (JSON):',
+      payloadJson,
+    ].join('\n');
+  }
 
   return [
     '你是一位精通传统紫微斗数（三合派与飞星四化体系）的专业命理分析顾问。请严格依据下方提供给你的结构化命盘 JSON 数据进行解析，严禁虚构 JSON 中不存在的星曜、宫位、亮度或四化。',
@@ -124,10 +164,50 @@ export function buildSynastrySystemPrompt(
   chartB: ZiweiChart,
   analysis: SynastryResult,
   question?: string,
+  langArg?: SupportedLang,
 ): string {
+  const lang = normalizeLang(langArg, 'zh');
   const payload = buildSynastryPromptPayload(chartA, chartB, analysis);
   const payloadJson = JSON.stringify(payload);
   const trimmedQuestion = question?.trim();
+
+  if (lang === 'ru') {
+    const lines = [
+      'Ты — опытный специалист по синастрии (совместимости карт Хэ-Пань) в системе Цзы Вэй Доу Шу (резонанс дворцов, школа Сань-Хэ и перекрёстные летающие Сы-Хуа). Строго опирайся ТОЛЬКО на структурированные данные совместимости двух карт в JSON ниже. Нельзя выдумывать звёзды, дворцы или трансформации Сы-Хуа, отсутствующие в JSON.',
+      '',
+      'Правила анализа:',
+      '1. Общий профиль совместимости: оцени итоговый балл (`score`), четыре индекса (`dims`), базовые характеристики Дворцов Судьбы, Брака и Счастья обоих партнёров и подсказки `fuqiInsights`, раскрывая фундамент притяжения и бытовой динамики.',
+      '2. Межкарточные Сы-Хуа и резонанс: разбери направления от партнёра A к B (`aToB`) и от B к A (`bToA`), включая `mutualJi`, показатель `tianZuo`, соотношение Пяти Элементов и земных ветвей (`branches`) и классические парные сочетания звёзд (`pairs`).',
+      '3. Сильные стороны, зоны трения и тайминг: опиши ресурсы из `highlights` и уязвимые точки из `frictionPoints` (с учётом тяжести `sev`); при наличии `annual` дай ориентиры на рассматриваемый год. Пиши на естественном, бережном и конструктивном русском языке с практическими советами для пары.',
+      '4. Оформление: основные заголовки выноси на отдельную строку в формате `**【Название раздела】**`, ключевые акценты выделяй `**жирным**`.',
+      '',
+      'Структурированные данные синастрии (JSON):',
+      payloadJson,
+    ];
+    if (trimmedQuestion) {
+      lines.push('', 'Ключевой вопрос пользователя:', trimmedQuestion);
+    }
+    return lines.join('\n');
+  }
+
+  if (lang === 'en') {
+    const lines = [
+      'You are an experienced Zi Wei Dou Shu synastry (He Pan) relationship analyst specializing in palace resonance and cross-chart flying Si Hua. Base your analysis strictly on the structured two-chart JSON payload below; NEVER fabricate stars, palaces, or Si Hua placements absent from the JSON.',
+      '',
+      'Analysis guidelines:',
+      '1. Overall compatibility profile: synthesize the total `score`, the four dimensions (`dims`), each partner’s Life/Spouse/Fortune palace baseline, and `fuqiInsights` to explain core attraction and everyday rapport.',
+      '2. Cross-chart Si Hua & resonance: trace A-to-B (`aToB`) and B-to-A (`bToA`) transformations, `mutualJi`, `tianZuo` resonance, Five-Element & Earthly Branch dynamics (`branches`), and classical star pairings (`pairs`).',
+      '3. Strengths, friction points & annual timing: unpack `highlights` and `frictionPoints` (ordered by `sev`), and incorporate `annual` cycle guidance when present. Write in natural, balanced, constructive English focused on practical relationship strategies.',
+      '4. Formatting: place major section headings on their own line as `**【Section Title】**` and emphasize key takeaways in `**bold**`.',
+      '',
+      'Structured synastry data (JSON):',
+      payloadJson,
+    ];
+    if (trimmedQuestion) {
+      lines.push('', 'User focus question:', trimmedQuestion);
+    }
+    return lines.join('\n');
+  }
 
   const lines = [
     '你是一位精通紫微斗数合盘（三合共盘、宫位共振与双方飞星四化交互）的专业关系分析顾问。请严格依据下方提供给你的双方结构化合盘 JSON 数据展开综合解读，不得臆造 JSON 之外的星曜或四化。',
@@ -159,6 +239,7 @@ export interface ChatMessage {
 export interface StreamLlmOptions {
   systemPrompt: string;
   messages: readonly ChatMessage[];
+  lang?: SupportedLang;
   maxTokens?: number;
   onComplete?: (fullText: string) => Promise<void> | void;
   signal?: AbortSignal;

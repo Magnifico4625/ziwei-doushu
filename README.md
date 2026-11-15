@@ -291,31 +291,36 @@ npm run dev
 本地验证：
 
 ```bash
-npm run typecheck   # TypeScript 全量类型检查
-npm test            # 18 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析、服务端基础设施与 API 路由）
+npm run typecheck             # TypeScript 全量类型检查
+npm test                      # 20 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析、服务端基础设施与 API 路由、三语 i18n/付费钩子/商用合规、商业化支付与多语言 API）
+npm run test:i18n-teasers-license   # 单独运行三语本地化、免费命宫与商用合规回归
+npm run test:stage3-commercial      # 单独运行支付闭环、CORS 与多语言后端 API 回归
 ```
 
 每次 push 与 PR 都会在 GitHub Actions 上跑同一套（见 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)）。
 
 > **关于后端 API 路由与零 LLM 架构：**
 > - 纯前端排盘、命盘展示、合盘起盘依旧在浏览器里用本仓库的引擎完成，**不需要任何 API Key 或数据库**。
-> - 本仓库现已内置 Next.js App Router 后端路由（`app/api/`）与服务端基础设施（`lib/server/`、`db/schema.sql`）：
+> - 本仓库现已内置 Next.js App Router 后端路由（`app/api/`）与服务端基础设施（`lib/server/`、`db/schema.sql`），并默认启用多语言（`lang: 'ru' | 'zh' | 'en'`）与 `ALLOWED_ORIGINS` 跨域白名单（`lib/server/cors.ts`，所有 7 个 `/api/*` 路由均导出 `OPTIONS` 预检并用 `withCors` 包装响应）：
 >   - `GET /api/health`：检查 PostgreSQL 与 Redis 健康状态（未配置 `DATABASE_URL` / `REDIS_URL` 时自动降级为内存模式），返回非敏感配置（`aiProvider`、`paywallMode`）。
->   - `POST /api/chart`：**零 LLM（Zero-LLM，$0 AI 成本）** 预检与免费排盘接口，支持本命盘与双盘合盘预览、痛点提取、格局判定与缓存检测，绝不导入或调用大模型。
->   - `POST /api/billing/webhook`：通过 `PAYWALL_WEBHOOK_SECRET` 校验 HMAC-SHA256 签名（`timingSafeEqual`），对 `webhook_events` / `orders` 幂等落库，并在 `status === 'paid'` 时签发 HMAC `accessToken`。
->   - `POST /api/interpret` 与 `POST /api/heming`：默认开启严格付费守卫 `AI_PAYWALL_MODE=strict`（在读取付费缓存或调用 LLM 之前拦截未授权请求并返回 `402 PAYWALL_LOCKED`），内置 IP 限流、Redis + PostgreSQL 双层缓存（含内存降级）与 SSE 流式输出（支持 `deepseek`、`anthropic`、`mimo`、`openai-compatible`）。本地开发免付费联调 AI 时，可在 `.env.local` 中设置 `AI_PAYWALL_MODE=off` 与对应模型 Key。
+>   - `POST /api/chart`：**零 LLM（Zero-LLM，$0 AI 成本）** 预检与免费排盘接口，支持 `lang: 'ru' | 'zh' | 'en'`、多语言城市检索（`findCityByQuery`，支持 `Москва` / `Moscow` / `莫斯科`）、同步直接格局识别（`detectPatterns`）、免费确定性 `命宫` 解读（`freeLifePalace`）、多语言付费钩子（`teasers`）与本地化摘要/格局输出，绝不导入或调用大模型。
+>   - **完整商业化支付闭环**（`/api/billing/*`）：
+>     - `POST /api/billing/checkout`：校验 `scope`（`interpret` / `heming` / `bundle`）与 `targetKey`（`chartKey`/`pairKey`），创建 `'pending'` 订单并返回 `orderId` 与 `checkoutUrl`（配置项 `APP_PUBLIC_URL`、`BILLING_PROVIDER`、`BILLING_CHECKOUT_BASE_URL`）。
+>     - `GET /api/billing/order?orderId=...`：轮询订单状态；未支付时仅返回 `paid: false`（绝不泄露 `accessToken`），`paid` 后签发并返回 HMAC `accessToken`。
+>     - `POST /api/billing/webhook`：通过 `PAYWALL_WEBHOOK_SECRET` 校验 HMAC-SHA256 签名（`timingSafeEqual`），支持将 `'pending'` 订单原子流转为 `'paid'`（或直接幂等落库 `webhook_events` / `orders`），并在 `status === 'paid'` 时签发 HMAC `accessToken`。
+>   - `POST /api/interpret` 与 `POST /api/heming`：支持 `lang: 'ru' | 'zh' | 'en'` 与多语言系统提示词；默认开启严格付费守卫 `AI_PAYWALL_MODE=strict`（基于语言无关的 `chartKey` / `pairKey` 校验权限，切换界面语言不失效，在读取付费缓存或调用 LLM 之前拦截未授权请求并返回 `402 PAYWALL_LOCKED`），内置 IP 限流、按语言隔离的 Redis + PostgreSQL 双层缓存（含内存降级）与 SSE 流式输出（支持 `deepseek`、`anthropic`、`mimo`、`openai-compatible`），`/api/heming` `previewOnly: true` 返回零 LLM 本地化合盘总览与 `teasers`。本地开发免付费联调 AI 时，可在 `.env.local` 中设置 `AI_PAYWALL_MODE=off` 与对应模型 Key。
 
 ---
 
 ## 四、排盘引擎
 
-排盘与确定性分析内核全部在 `lib/ziwei/`，已与界面组件完全解耦（`BirthFormState` 统一定义于 `lib/ziwei/types.ts`，`lib/ziwei/` 内零 `@/components/*` 依赖；核心排盘、真太阳时、合盘与命盘分析模块不依赖 `server-only`，可在 Next.js 与 headless Node/`tsx` 环境直接运行）。
+排盘与确定性分析内核全部在 `lib/ziwei/`，已与界面组件完全解耦（`BirthFormState` 统一定义于 `lib/ziwei/types.ts`，`lib/ziwei/` 内零 `@/components/*` 依赖；`patterns.ts` 与 `famous.ts` 也已移除 `server-only`，核心排盘、真太阳时、格局、三语本地化、免费 `命宫` 生成、合盘与命盘分析模块均可在 Next.js 与 headless Node/`tsx` 环境直接运行）。同时 `lib/ziwei/`、`lib/server/`、`app/api/` 运行时代码已清理全部非商用引文（零 `CC BY-NC-SA 4.0` 运行时文本）。
 
 ### 4.1 能做到什么（与常见排盘库的差异）
 
 | 能力 | 说明 |
 |------|------|
-| **真太阳时校正** | 按出生地经度与时区标准经线算时差 + 均时差，内置中国省市及 58 个海外/国际城市（覆盖俄罗斯全部 11 个标准时区及伏尔加格勒、独联体与全球枢纽），支持海外 IANA 时区（含历史夏令时）与手动选择 `UTC-12`..`+14`（含 `UTC+5:30`），避免东西向差一个时辰。切换日消歧与 Temporal `compatible` 相同：不存在的钟点用过渡后的偏移，重复的钟点用较早一次的偏移 |
+| **真太阳时校正** | 按出生地经度与时区标准经线算时差 + 均时差，内置中国省市、58 个海外/国际城市及 18 个扩展俄/独联体/欧洲枢纽（`EXTRA_OVERSEAS_CITIES`，覆盖俄罗斯全部 11 个标准时区及伏尔加格勒、独联体与全球枢纽），支持 `findCityByQuery` 多语言模糊/别名检索（俄/英/中）与海外 IANA 时区（含历史夏令时）及手动选择 `UTC-12`..`+14`（含 `UTC+5:30`），避免东西向差一个时辰。切换日消歧与 Temporal `compatible` 相同：不存在的钟点用过渡后的偏移，重复的钟点用较早一次的偏移 |
 | **中国夏令时** | 按通行排盘表（不是 IANA）判定 1935–1991 年间指定夏令时区间，并在表单提示（一键减 1 小时，不静默改时间）。与 IANA `Asia/Shanghai` 的差别见下文 |
 | **闰月四种口径** | 闰月归前月 / 归后月 / 按日切分 / 按本月，可配置，不写死一派 |
 | **晚子时换日** | 填写出生地/时区时按真太阳时 23:00–23:59 判晚子时并进位次日（真太阳时已过 00:00 属次日早子时）；未填出生地时按钟表 23:00–23:59；换日策略可切换 |
@@ -323,9 +328,12 @@ npm test            # 18 条回归脚本（768 盘 × 紫微铁律、夏令时�
 | **亮度流派可切换** | 不同流派（含主流排盘软件的不同版本）对辅星亮度判法不一致，做成开关而非写死 |
 | **四化与飞星** | 生年四化、大限 / 流年四化、飞星自化 |
 | **十二神煞** | 本命层按生年支起，流年层改按流年支起 |
-| **格局判定** | 1100+ 行规则库（紫府同宫、日月并明、七杀朝斗等） |
+| **格局判定** | 1100+ 行规则库（紫府同宫、日月并明、七杀朝斗等），已移除 `server-only`，可在引擎层直接同步调用 |
+| **三语本地化（`i18n.ts`）** | 完整 `'ru' | 'zh' | 'en'` 领域词典与无状态翻译器，覆盖 12 宫、14 主星与全部辅星/神煞、四化、亮度、五行局、干支、44+ 格局与命盘摘要/痛点（`translateChartSummary`） |
+| **零 LLM 免费 `命宫` 解读与付费钩子** | `db-analysis.ts`（`generateFreeLifePalaceReading`）按星曜亮度与生年四化生成全部 14 主星、24 组双星与空宫借对宫主星的确定性三语免费解读；`paywall-teasers.ts`（`generateChartTeasers` / `generateSynastryTeasers`）生成 `$0.00` 多语言付费钩子 |
 | **确定性合盘引擎** | `heming.ts`（零 LLM）：跨盘飞星四化（`yearStem` 及可选 `mingStem`/`fuqiStem`）、夫妻宫/借星共振、地支六合/三合/六冲、可选流年叠加、0–100 评分与 `< 3 KB` 紧凑 prompt 载荷（`analyzeSynastry`、`buildSynastryPromptPayload`） |
 | **确定性命盘分析** | `chart-analyzer.ts`（零 LLM、无头可用）：规范命盘缓存键（`getChartCacheKey`）、高信号痛点提取（`extractChartPainPoints`：本命/自化/大限/流年化忌、双忌叠冲夹与重煞聚宫）、命身与三方四正摘要及 `< 3 KB` prompt 载荷（`buildChartPromptPayload`） |
+| **商业化合规卫生** | `lib/ziwei/`、`lib/server/`、`app/api/` 运行时源码不含任何 `CC BY-NC-SA 4.0` 讲座引文与 `ni_quote` 字段，可安全用于纯商业 MIT 代码部署 |
 
 IANA 切换日只有一条规则，与南北半球、经度正负无关，等同 Temporal 的 `disambiguation: 'compatible'`：当地时间不存在（春令拨快跳过的那段）用过渡之后的偏移；当地时间出现两次（秋令拨回重叠的那段）用较早一次的偏移（过渡前那一侧）。例如纽约 2024-03-10 02:30（不存在）为 UTC−4，伦敦 2024-03-31 01:30 为 UTC+1，莫斯科 2011-03-27 02:30 为 UTC+4，悉尼 2024-10-06 02:30 为 UTC+11；纽约 2024-11-03 01:30（出现两次）为较早的 UTC−4，伦敦 2024-10-27 01:30 为 UTC+1，莫斯科 2014-10-26 01:30 为 UTC+4，悉尼 2024-04-07 02:30 为 UTC+11。表单会写明采用的偏移，不拦截。
 
@@ -338,13 +346,16 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 | `algorithm.ts` | 完整排盘流程：安命宫、定五行局、安十四主星、安辅星、排大限流年 |
 | `constants.ts` | 天干地支、十四主星、辅星常量 |
 | `sihua.ts` | 四化飞星系统（禄权科忌），含各天干四化对照表 |
-| `patterns.ts` | **1100+ 行格局知识库**：紫府同宫、日月并明、七杀朝斗等经典格局判定规则 |
-| `heming-knowledge.ts` | 合盘方法论：倪师体系下双盘比对逻辑 |
+| `patterns.ts` | **1100+ 行格局知识库**：紫府同宫、日月并明、七杀朝斗等经典格局判定规则（已移除 `server-only`，Node/`tsx` 与 Next.js 通用） |
+| `heming-knowledge.ts` | 合盘方法论：基于《紫微斗数全书》《骨髓赋》古典断语与三合飞星结构化体系的双盘比对逻辑（零非商用引用） |
+| `i18n.ts` | 俄 / 中 / 英（`'ru' | 'zh' | 'en'`）完整紫微领域词典与无状态翻译器（12 宫、星曜、四化、亮度、格局与命盘摘要） |
+| `db-analysis.ts` | 确定性零 LLM 免费 `命宫` 解读生成器（`generateFreeLifePalaceReading`：覆盖 14 主星、24 组双星与空宫借星，`STAR_DB` 保持置空） |
+| `paywall-teasers.ts` | 确定性零 LLM 付费钩子生成器（`generateChartTeasers`、`generateSynastryTeasers`：三语命盘/合盘免费摘要与解锁钩子） |
 | `types.ts` | TypeScript 核心类型定义（含与 UI 解耦的 `BirthFormState`、`BirthInfo`、`ZiweiChart`） |
-| `cities.ts` | 中国省市及 58 个海外/国际城市（含俄罗斯全 11 时区及伏尔加格勒、独联体与全球主要城市）经纬度与 IANA 时区配置 |
+| `cities.ts` | 中国省市、58 个海外/国际城市及 18 个扩展枢纽（`EXTRA_OVERSEAS_CITIES`）经纬度与 IANA 时区配置，支持 `findCityByQuery` 与 `getCityDisplayName` 多语言检索 |
 | `heming.ts` | 确定性合盘计算引擎（`analyzeSynastry`、`buildSynastryPromptPayload`）：跨盘飞星、夫妻宫共振、流年叠加与评分 |
 | `chart-analyzer.ts` | 确定性命盘分析器（`getChartCacheKey`、`extractChartPainPoints`、`buildChartPromptPayload`）：缓存键、痛点提取与紧凑载荷 |
-| `famous.ts` | 历史名人命盘示例数据 |
+| `famous.ts` | 历史名人命盘示例数据（已移除 `server-only`，可在无头环境直接导入） |
 | `school-data.ts` / `school-tables.generated.ts` / `school-config.ts` | 星曜亮度流派数据与对照表、闰月与晚子时口径配置 |
 | `shier-shen.ts` | 十二神煞（本命按生年支起、流年层按流年支起） |
 | `true-solar-time.ts` | 真太阳时校正（经度差 + 均时差 + IANA 历史时区/夏令时解析） |
@@ -390,7 +401,7 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 
 **Demo 能跑通的**：出生信息表单、命盘方格与宫位详情、本命 / 大限 / 流年切换、古籍阅读器（全文搜索）、命理百科（14 主星 × 12 宫位）、亮暗主题、移动端适配。
 
-**Demo 里没有的**：线上商业版重做过的交互界面、商业版合盘图谱与分享卡片、线上专有断语库与运营配置，以及**本地静态断语内容本身**（`db-analysis.ts` 是占位实现）。也就是说，Demo 画得出盘并可通过配置 `/api/interpret` 与 `/api/heming` 接入大模型流式解读，但给不出线上那套静态断语库。
+**Demo 里没有的**：线上商业版重做过的交互界面、商业版合盘图谱与分享卡片、线上专有 13 主题完整断语库与运营配置（`lib/ziwei/db-analysis.ts` 中的静态 SEO 百科映射 `STAR_DB` 仍置空占位，但已内置零 LLM 免费 `命宫` 解读生成器 `generateFreeLifePalaceReading` 与 `paywall-teasers.ts` 多语言付费钩子）。也就是说，Demo 画得出盘、提供免费 `命宫` 解读与付费钩子，并可通过配置 `/api/interpret` 与 `/api/heming` 接入大模型多语言流式解读，但给不出线上那套 13 主题静态断语库。
 
 ---
 
@@ -398,10 +409,10 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 
 | | 内容 |
 |---|---|
-| ✅ **开源** | 排盘引擎（`lib/ziwei/`）、服务端基础设施与 API 路由（`lib/server/`、`app/api/`、`db/schema.sql`：含健康检查、零 LLM `/api/chart`、HMAC 支付回调 `/api/billing/webhook`、严格付费守卫 `AI_PAYWALL_MODE`、限流、Redis/PostgreSQL 缓存及多模型 SSE 流式输出 `/api/interpret` 与 `/api/heming`）、古籍公版原文（`lib/classics/`）、SEO 知识图谱（`lib/seo/`）、Demo 界面、51.8 万样本数据集、13 维解读数据集 v4.0 |
-| ❌ **不开源** | 断语库（`lib/ziwei/db-analysis.ts` 是占位，线上是上万行的 13 主题断语）、线上商业版专有提示词与完整前端界面、商户支付网关对接 / 用户账号体系、线上水印与生产环境部署密钥 |
+| ✅ **开源** | 排盘引擎与零 LLM 分析（`lib/ziwei/`：含三语本地化 `i18n.ts`、多语言城市检索 `cities.ts`、免费 `命宫` 解读 `db-analysis.ts`、付费钩子 `paywall-teasers.ts`、无 `server-only` 格局/样本模块）、服务端基础设施与 API 路由（`lib/server/`、`app/api/`、`db/schema.sql`：含健康检查、零 LLM `/api/chart`、完整支付闭环 `/api/billing/checkout` + `/api/billing/order` + `/api/billing/webhook`、`ALLOWED_ORIGINS` CORS、严格付费守卫 `AI_PAYWALL_MODE`、限流、语言隔离的 Redis/PostgreSQL 缓存及多语言 SSE 流式输出 `/api/interpret` 与 `/api/heming`）、古籍公版原文（`lib/classics/`）、SEO 知识图谱（`lib/seo/`）、Demo 界面、51.8 万样本数据集、13 维解读数据集 v4.0 |
+| ❌ **不开源** | 完整 13 主题商业断语库（`lib/ziwei/db-analysis.ts` 中 `STAR_DB` 置空，线上是上万行的 13 主题断语）、线上商业版完整前端界面、真实商户支付网关密钥 / 用户账号体系、线上水印与生产环境部署密钥 |
 
-你可以直接启用仓库内置的 `/api/interpret` 与 `/api/heming` SSE 路由（由 `lib/server/llm.ts` 结合 `chart-analyzer.ts` 的 `buildChartPromptPayload` 与 `heming.ts` 的 `buildSynastryPromptPayload` 生成 `< 3 KB` 紧凑载荷），也可以参考 `lib/ziwei/patterns.ts` 和 `heming-knowledge.ts` 自行扩展 prompt。
+你可以直接启用仓库内置的 `/api/interpret` 与 `/api/heming` SSE 路由（由 `lib/server/llm.ts` 结合 `chart-analyzer.ts` 的 `buildChartPromptPayload` 与 `heming.ts` 的 `buildSynastryPromptPayload` 生成 `< 3 KB` 紧凑载荷，支持 `'ru' | 'zh' | 'en'`），也可以参考 `lib/ziwei/patterns.ts` 和 `heming-knowledge.ts` 自行扩展 prompt。
 
 ---
 
@@ -417,14 +428,14 @@ IANA 切换日只有一条规则，与南北半球、经度正负无关，等同
 
 ## 九、协议
 
-本仓库分四部分授权。前三部分是宽松协议，**商用没有限制**；倪师原话目录**不许商用**：
+本仓库分四部分授权。前三部分是宽松协议，**商用没有限制**（且 `lib/ziwei/`、`lib/server/`、`app/api/` 运行时代码已完全清理 `CC BY-NC-SA 4.0` 非商用引文与 `ni_quote` 字段）；独立归档目录 [`docs/tianji-ziwei/`](./docs/tianji-ziwei/) **不许商用**：
 
 | 内容 | 协议 | 简单说 |
 |------|------|--------|
-| **代码**（`lib/`、`app/`、`components/`、`db/`） | [MIT License](./LICENSE) | 拿去随便用，保留 LICENSE 文件即可 |
+| **代码**（`lib/`、`app/`、`components/`、`db/`，运行时零 `CC BY-NC-SA 4.0` 文本） | [MIT License](./LICENSE) | 拿去随便用，可自由商用，保留 LICENSE 文件即可 |
 | **数据**（Releases 中的 51.8 万样本数据集 v3.0、13 维解读数据集 v4.0） | [CC BY 4.0](./DATASET-LICENSE) · 要求 attribution | 商用也行，**注明数据来源即可** |
 | **古籍原文**（骨髓赋、紫微斗数全集 / 全书等） | Public Domain | 古书都是公有领域，不存在版权 |
-| **倪师原话**（[`docs/tianji-ziwei/`](./docs/tianji-ziwei/)） | [CC BY-NC-SA 4.0](./docs/tianji-ziwei/LICENSE.md) | 可以引用、转载，注明出处；**不许商用**，改编后用同样协议 |
+| **倪师原话归档**（[`docs/tianji-ziwei/`](./docs/tianji-ziwei/)） | [CC BY-NC-SA 4.0](./docs/tianji-ziwei/LICENSE.md) | 仅作独立语料归档，未混入运行时代码；**不许商用**，改编后用同样协议 |
 
 **一句话**：代码和数据拿去用，商用也行，把来源链接带上就行；倪师原话只限非商业的学习研究（数据集解读里引用的倪师原话同样不在数据授权范围内）。
 

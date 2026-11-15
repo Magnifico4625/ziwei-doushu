@@ -1,4 +1,5 @@
 import { getServerConfig } from '@/lib/server/env';
+import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import {
   checkRateLimit,
   extractClientIp,
@@ -8,15 +9,35 @@ import {
   getChartInterpretation,
   getSynastryInterpretation,
 } from '@/lib/server/db';
-import { canonicalPairKey, getRedisClient, hashQuestion } from '@/lib/server/cache';
+import {
+  canonicalPairKey,
+  getRedisClient,
+  hashQuestion,
+  scopedQuestionHash,
+  scopedTopicKey,
+} from '@/lib/server/cache';
 import { generateChart } from '@/lib/ziwei/algorithm';
 import {
   analyzeChartSummary,
   getChartCacheKey,
-  type PatternSummary,
 } from '@/lib/ziwei/chart-analyzer';
+import {
+  findCityByQuery,
+  findCityInfo,
+  getCityDisplayName,
+} from '@/lib/ziwei/cities';
 import { isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { analyzeSynastry } from '@/lib/ziwei/heming';
+import {
+  normalizeLang,
+  translateChartSummary,
+  type SupportedLang,
+} from '@/lib/ziwei/i18n';
+import { detectPatterns } from '@/lib/ziwei/patterns';
+import {
+  generateChartTeasers,
+  generateSynastryTeasers,
+} from '@/lib/ziwei/paywall-teasers';
 import { formToBirthInfo } from '@/lib/ziwei/share';
 import type { LateZishiRule } from '@/lib/ziwei/true-solar-time';
 import type { BirthFormState, BirthInfo, ZiweiChart } from '@/lib/ziwei/types';
@@ -26,24 +47,36 @@ export const dynamic = 'force-dynamic';
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; message: string };
 
+interface ResolvedCityLocation {
+  province: string;
+  city: string;
+  longitude?: number;
+  utcOffsetMinutes?: number;
+  timeZone?: string;
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function jsonError(
+  req: Request,
   status: number,
   error: string,
   code: string,
   message?: string,
   headers?: HeadersInit,
 ): Response {
-  return Response.json(
-    {
-      error,
-      code,
-      ...(message ? { message } : {}),
-    },
-    { status, headers },
+  return withCors(
+    req,
+    Response.json(
+      {
+        error,
+        code,
+        ...(message ? { message } : {}),
+      },
+      { status, headers },
+    ),
   );
 }
 
@@ -66,13 +99,14 @@ function getRateLimitRedis(): RateLimitRedisClient | null {
   };
 }
 
-async function detectPatternsSafe(chart: ZiweiChart): Promise<PatternSummary[]> {
-  try {
-    const m = await import('@/lib/ziwei/patterns');
-    return m.detectPatterns(chart);
-  } catch {
-    return [];
+function parseLang(raw: unknown): ParseResult<SupportedLang> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: 'zh' };
   }
+  if (typeof raw !== 'string') {
+    return { ok: false, message: "lang must be 'ru', 'zh', or 'en'" };
+  }
+  return { ok: true, value: normalizeLang(raw, 'zh') };
 }
 
 function parseOptionalTargetYear(raw: unknown): ParseResult<number | undefined> {
@@ -95,7 +129,59 @@ function parseLateZishi(raw: unknown): ParseResult<LateZishiRule> {
   return { ok: false, message: "lateZishi must be 'next-day' or 'current-day'" };
 }
 
-function parseBirthInfo(raw: unknown): ParseResult<BirthInfo> {
+function resolveCityLocation(
+  rawProvince: string,
+  rawCity: string,
+  lang: SupportedLang,
+): ResolvedCityLocation {
+  const province = rawProvince.trim();
+  const city = rawCity.trim();
+  if (!city) {
+    return { province, city };
+  }
+
+  const direct = province ? findCityInfo(province, city) : undefined;
+  if (direct) {
+    return {
+      province,
+      city,
+      longitude: direct.longitude,
+      utcOffsetMinutes: direct.utcOffsetMinutes,
+      timeZone: direct.timeZone,
+    };
+  }
+
+  const queried = findCityByQuery(city, lang);
+  if (queried) {
+    return {
+      province: queried.provinceName,
+      city: queried.city.name,
+      longitude: queried.city.longitude,
+      utcOffsetMinutes: queried.city.utcOffsetMinutes,
+      timeZone: queried.city.timeZone,
+    };
+  }
+
+  return { province, city };
+}
+
+function resolveLocalizedCityDisplay(
+  chart: ZiweiChart,
+  lang: SupportedLang,
+): string | undefined {
+  const rawCity = chart.birthInfo.city?.trim();
+  if (!rawCity) return undefined;
+  const direct = chart.birthInfo.province
+    ? findCityInfo(chart.birthInfo.province, rawCity)
+    : undefined;
+  if (direct) {
+    return getCityDisplayName(direct, lang);
+  }
+  const queried = findCityByQuery(rawCity, lang);
+  return queried ? getCityDisplayName(queried.city, lang) : rawCity;
+}
+
+function parseBirthInfo(raw: unknown, lang: SupportedLang): ParseResult<BirthInfo> {
   if (!isPlainRecord(raw)) {
     return { ok: false, message: 'birthInfo must be an object' };
   }
@@ -129,6 +215,18 @@ function parseBirthInfo(raw: unknown): ParseResult<BirthInfo> {
       return { ok: false, message: 'birthInfo.utcOffsetMinutes must be an integer in [-720, 840]' };
     }
   }
+  if (raw.timeZone !== undefined && typeof raw.timeZone !== 'string') {
+    return { ok: false, message: 'birthInfo.timeZone must be a string' };
+  }
+
+  const rawProvince = typeof raw.province === 'string' ? raw.province : '';
+  const rawCity = typeof raw.city === 'string' ? raw.city : '';
+  const loc = resolveCityLocation(rawProvince, rawCity, lang);
+
+  const longitude = typeof raw.longitude === 'number' ? raw.longitude : loc.longitude;
+  const utcOffsetMinutes =
+    typeof raw.utcOffsetMinutes === 'number' ? raw.utcOffsetMinutes : loc.utcOffsetMinutes;
+  const timeZone = typeof raw.timeZone === 'string' ? raw.timeZone : loc.timeZone;
 
   return {
     ok: true,
@@ -139,13 +237,11 @@ function parseBirthInfo(raw: unknown): ParseResult<BirthInfo> {
       hour,
       gender,
       ...(typeof raw.name === 'string' && raw.name ? { name: raw.name } : {}),
-      ...(typeof raw.province === 'string' && raw.province ? { province: raw.province } : {}),
-      ...(typeof raw.city === 'string' && raw.city ? { city: raw.city } : {}),
-      ...(typeof raw.longitude === 'number' ? { longitude: raw.longitude } : {}),
-      ...(typeof raw.utcOffsetMinutes === 'number'
-        ? { utcOffsetMinutes: raw.utcOffsetMinutes }
-        : {}),
-      ...(typeof raw.timeZone === 'string' ? { timeZone: raw.timeZone } : {}),
+      ...(loc.province ? { province: loc.province } : {}),
+      ...(loc.city ? { city: loc.city } : {}),
+      ...(longitude !== undefined ? { longitude } : {}),
+      ...(utcOffsetMinutes !== undefined ? { utcOffsetMinutes } : {}),
+      ...(timeZone !== undefined ? { timeZone } : {}),
     },
   };
 }
@@ -158,7 +254,7 @@ function parseStrictDigits(raw: unknown): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function parseBirthForm(raw: unknown): ParseResult<BirthFormState> {
+function parseBirthForm(raw: unknown, lang: SupportedLang): ParseResult<BirthFormState> {
   if (!isPlainRecord(raw)) {
     return { ok: false, message: 'form must be an object' };
   }
@@ -198,9 +294,10 @@ function parseBirthForm(raw: unknown): ParseResult<BirthFormState> {
     return { ok: false, message: "form.gender must be 'male' or 'female'" };
   }
 
-  const longitude = raw.longitude === undefined ? 120 : raw.longitude;
-  if (typeof longitude !== 'number' || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
-    return { ok: false, message: 'form.longitude must be a finite number in [-180, 180]' };
+  if (raw.longitude !== undefined) {
+    if (typeof raw.longitude !== 'number' || !Number.isFinite(raw.longitude) || raw.longitude < -180 || raw.longitude > 180) {
+      return { ok: false, message: 'form.longitude must be a finite number in [-180, 180]' };
+    }
   }
 
   if (raw.utcOffsetMinutes !== undefined) {
@@ -217,6 +314,19 @@ function parseBirthForm(raw: unknown): ParseResult<BirthFormState> {
     return { ok: false, message: 'form.timeZone must be a string' };
   }
 
+  const rawProvince = typeof raw.province === 'string' ? raw.province : '';
+  const rawCity = typeof raw.city === 'string' ? raw.city : '';
+  const loc = resolveCityLocation(rawProvince, rawCity, lang);
+
+  const longitude = typeof raw.longitude === 'number' ? raw.longitude : (loc.longitude ?? 120);
+  const timeZone = typeof raw.timeZone === 'string' ? raw.timeZone : loc.timeZone;
+  const utcOffsetMinutes =
+    typeof raw.utcOffsetMinutes === 'number'
+      ? raw.utcOffsetMinutes
+      : !timeZone
+        ? loc.utcOffsetMinutes
+        : undefined;
+
   return {
     ok: true,
     value: {
@@ -227,23 +337,21 @@ function parseBirthForm(raw: unknown): ParseResult<BirthFormState> {
       clockHour: clockHourStr,
       clockMinute: clockMinuteStr,
       unknownTime,
-      province: typeof raw.province === 'string' ? raw.province : '',
-      city: typeof raw.city === 'string' ? raw.city : '',
+      province: loc.province,
+      city: loc.city,
       longitude,
-      ...(typeof raw.utcOffsetMinutes === 'number'
-        ? { utcOffsetMinutes: raw.utcOffsetMinutes }
-        : {}),
-      ...(typeof raw.timeZone === 'string' ? { timeZone: raw.timeZone } : {}),
+      ...(utcOffsetMinutes !== undefined ? { utcOffsetMinutes } : {}),
+      ...(timeZone !== undefined ? { timeZone } : {}),
       gender: raw.gender,
     },
   };
 }
 
-function parseChartObject(raw: unknown): ParseResult<ZiweiChart> {
+function parseChartObject(raw: unknown, lang: SupportedLang): ParseResult<ZiweiChart> {
   if (!isPlainRecord(raw)) {
     return { ok: false, message: 'chart must be an object' };
   }
-  const birthParsed = parseBirthInfo(raw.birthInfo);
+  const birthParsed = parseBirthInfo(raw.birthInfo, lang);
   if (!birthParsed.ok) {
     return { ok: false, message: `chart.${birthParsed.message}` };
   }
@@ -304,12 +412,13 @@ function resolveChartInput(
   birthInfoRaw: unknown,
   formRaw: unknown,
   lateZishi: LateZishiRule,
+  lang: SupportedLang,
 ): ParseResult<ZiweiChart> {
   if (chartRaw !== undefined) {
-    return parseChartObject(chartRaw);
+    return parseChartObject(chartRaw, lang);
   }
   if (formRaw !== undefined) {
-    const parsedForm = parseBirthForm(formRaw);
+    const parsedForm = parseBirthForm(formRaw, lang);
     if (!parsedForm.ok) return parsedForm;
     try {
       const info = formToBirthInfo(parsedForm.value, lateZishi);
@@ -320,7 +429,7 @@ function resolveChartInput(
     }
   }
   if (birthInfoRaw !== undefined) {
-    const parsedInfo = parseBirthInfo(birthInfoRaw);
+    const parsedInfo = parseBirthInfo(birthInfoRaw, lang);
     if (!parsedInfo.ok) return parsedInfo;
     try {
       return { ok: true, value: generateChart(parsedInfo.value) };
@@ -330,6 +439,10 @@ function resolveChartInput(
     }
   }
   return { ok: false, message: 'Missing chart, birthInfo, or form input' };
+}
+
+export async function OPTIONS(req: Request): Promise<Response> {
+  return handleCorsPreflight(req);
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -343,6 +456,7 @@ export async function POST(req: Request): Promise<Response> {
   });
   if (!rl.allowed) {
     return jsonError(
+      req,
       429,
       'rate_limit_exceeded',
       'RATE_LIMITED',
@@ -355,22 +469,27 @@ export async function POST(req: Request): Promise<Response> {
   try {
     rawBody = await req.json();
   } catch {
-    return jsonError(400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
+    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
   }
 
   if (!isPlainRecord(rawBody)) {
-    return jsonError(400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
+    return jsonError(req, 400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
   }
 
+  const langParsed = parseLang(rawBody.lang);
+  if (!langParsed.ok) {
+    return jsonError(req, 400, 'invalid_lang', 'INVALID_INPUT', langParsed.message);
+  }
   const targetYearParsed = parseOptionalTargetYear(rawBody.targetYear);
   if (!targetYearParsed.ok) {
-    return jsonError(400, 'invalid_target_year', 'INVALID_INPUT', targetYearParsed.message);
+    return jsonError(req, 400, 'invalid_target_year', 'INVALID_INPUT', targetYearParsed.message);
   }
   const lateZishiParsed = parseLateZishi(rawBody.lateZishi);
   if (!lateZishiParsed.ok) {
-    return jsonError(400, 'invalid_late_zishi', 'INVALID_INPUT', lateZishiParsed.message);
+    return jsonError(req, 400, 'invalid_late_zishi', 'INVALID_INPUT', lateZishiParsed.message);
   }
 
+  const lang = langParsed.value;
   const targetYear = targetYearParsed.value;
   const lateZishi = lateZishiParsed.value;
 
@@ -388,45 +507,55 @@ export async function POST(req: Request): Promise<Response> {
       rawBody.birthInfoA,
       rawBody.formA,
       lateZishi,
+      lang,
     );
     if (!resolvedA.ok) {
-      return jsonError(400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner A: ${resolvedA.message}`);
+      return jsonError(req, 400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner A: ${resolvedA.message}`);
     }
     const resolvedB = resolveChartInput(
       rawBody.chartB,
       rawBody.birthInfoB,
       rawBody.formB,
       lateZishi,
+      lang,
     );
     if (!resolvedB.ok) {
-      return jsonError(400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner B: ${resolvedB.message}`);
+      return jsonError(req, 400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner B: ${resolvedB.message}`);
     }
 
     const chartA = resolvedA.value;
     const chartB = resolvedB.value;
     const pairKey = canonicalPairKey(chartA, chartB, targetYear);
     const synastry = analyzeSynastry(chartA, chartB, { targetYear });
+    const scopedQHash = scopedQuestionHash(hashQuestion(), lang);
     const hasCachedInterpretation = Boolean(
-      (await getSynastryInterpretation(pairKey, hashQuestion())) ??
-      (await getSynastryInterpretation(pairKey)),
+      (await getSynastryInterpretation(pairKey, scopedQHash)) ??
+      (lang === 'zh' ? await getSynastryInterpretation(pairKey) : null),
     );
+    const teasers = generateSynastryTeasers(synastry, lang);
 
-    return Response.json(
-      {
-        ok: true,
-        mode: 'synastry',
-        pairKey,
-        chartA,
-        chartB,
-        synastry,
-        hasCachedInterpretation,
-      },
-      { status: 200 },
+    return withCors(
+      req,
+      Response.json(
+        {
+          ok: true,
+          mode: 'synastry',
+          lang,
+          pairKey,
+          chartA,
+          chartB,
+          synastry,
+          teasers,
+          hasCachedInterpretation,
+        },
+        { status: 200 },
+      ),
     );
   }
 
   if (rawBody.form === undefined && rawBody.birthInfo === undefined) {
     return jsonError(
+      req,
       400,
       'missing_birth_input',
       'INVALID_INPUT',
@@ -434,30 +563,52 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const resolvedNatal = resolveChartInput(undefined, rawBody.birthInfo, rawBody.form, lateZishi);
+  const resolvedNatal = resolveChartInput(
+    undefined,
+    rawBody.birthInfo,
+    rawBody.form,
+    lateZishi,
+    lang,
+  );
   if (!resolvedNatal.ok) {
-    return jsonError(400, 'invalid_birth_input', 'INVALID_INPUT', resolvedNatal.message);
+    return jsonError(req, 400, 'invalid_birth_input', 'INVALID_INPUT', resolvedNatal.message);
   }
 
   const chart = resolvedNatal.value;
   const cacheKey = getChartCacheKey(chart, { targetYear });
   const summary = analyzeChartSummary(chart, { targetYear });
-  const patterns = await detectPatternsSafe(chart);
+  const patterns = detectPatterns(chart);
   const topicKey = typeof rawBody.topicKey === 'string' && rawBody.topicKey.trim().length > 0
     ? rawBody.topicKey.trim()
     : undefined;
-  const cached = Boolean(await getChartInterpretation(cacheKey, topicKey));
+  const cached = Boolean(
+    await getChartInterpretation(cacheKey, scopedTopicKey(topicKey, lang)),
+  );
+  const teasers = generateChartTeasers(chart, summary, patterns, lang);
+  const localizedSummary = translateChartSummary(chart, summary, patterns, lang);
+  const localizedCity = resolveLocalizedCityDisplay(chart, lang);
+  if (localizedCity) {
+    localizedSummary.basic.city = localizedCity;
+  }
 
-  return Response.json(
-    {
-      ok: true,
-      mode: 'natal',
-      cacheKey,
-      chart,
-      summary,
-      patterns,
-      hasCachedInterpretation: cached,
-    },
-    { status: 200 },
+  return withCors(
+    req,
+    Response.json(
+      {
+        ok: true,
+        mode: 'natal',
+        lang,
+        cacheKey,
+        chart,
+        summary,
+        patterns,
+        freeLifePalace: teasers.freeLifePalace,
+        teasers,
+        localizedSummary,
+        localizedPatterns: localizedSummary.patterns,
+        hasCachedInterpretation: cached,
+      },
+      { status: 200 },
+    ),
   );
 }

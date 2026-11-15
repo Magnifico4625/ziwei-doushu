@@ -4,6 +4,7 @@ import {
   verifyWebhookSignature,
   type EntitlementScope,
 } from '@/lib/server/access-token';
+import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { recordWebhookOrderIfNew } from '@/lib/server/db';
 
 export const runtime = 'nodejs';
@@ -23,21 +24,35 @@ function nonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function jsonError(status: number, error: string, code: string, message?: string): Response {
-  return Response.json(
-    {
-      error,
-      code,
-      ...(message ? { message } : {}),
-    },
-    { status },
+function jsonError(
+  req: Request,
+  status: number,
+  error: string,
+  code: string,
+  message?: string,
+): Response {
+  return withCors(
+    req,
+    Response.json(
+      {
+        error,
+        code,
+        ...(message ? { message } : {}),
+      },
+      { status },
+    ),
   );
+}
+
+export async function OPTIONS(req: Request): Promise<Response> {
+  return handleCorsPreflight(req);
 }
 
 export async function POST(req: Request): Promise<Response> {
   const cfg = getServerConfig();
   if (!cfg.paywallWebhookSecret) {
     return jsonError(
+      req,
       503,
       'webhook_not_configured',
       'WEBHOOK_UNCONFIGURED',
@@ -52,18 +67,18 @@ export async function POST(req: Request): Promise<Response> {
     null;
 
   if (!verifyWebhookSignature(rawBody, signatureHeader, cfg.paywallWebhookSecret)) {
-    return jsonError(401, 'invalid_signature', 'UNAUTHORIZED', 'Invalid webhook signature.');
+    return jsonError(req, 401, 'invalid_signature', 'UNAUTHORIZED', 'Invalid webhook signature.');
   }
 
   let parsedBody: unknown;
   try {
     parsedBody = JSON.parse(rawBody);
   } catch {
-    return jsonError(400, 'invalid_json', 'BAD_REQUEST', 'Webhook body must be valid JSON.');
+    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Webhook body must be valid JSON.');
   }
 
   if (!isPlainRecord(parsedBody)) {
-    return jsonError(400, 'invalid_payload', 'BAD_REQUEST', 'Webhook body must be a JSON object.');
+    return jsonError(req, 400, 'invalid_payload', 'BAD_REQUEST', 'Webhook body must be a JSON object.');
   }
 
   const eventId = nonEmptyString(parsedBody.eventId);
@@ -74,6 +89,7 @@ export async function POST(req: Request): Promise<Response> {
 
   if (!eventId || !orderId || !targetKey || !status || !isEntitlementScope(scope)) {
     return jsonError(
+      req,
       400,
       'invalid_webhook_fields',
       'INVALID_INPUT',
@@ -88,7 +104,7 @@ export async function POST(req: Request): Promise<Response> {
       !Number.isInteger(parsedBody.amountMinor) ||
       parsedBody.amountMinor < 0
     ) {
-      return jsonError(400, 'invalid_amount', 'INVALID_INPUT', 'amountMinor must be a non-negative integer.');
+      return jsonError(req, 400, 'invalid_amount', 'INVALID_INPUT', 'amountMinor must be a non-negative integer.');
     }
     amountMinor = parsedBody.amountMinor;
   }
@@ -97,7 +113,7 @@ export async function POST(req: Request): Promise<Response> {
   if (parsedBody.currency !== undefined && parsedBody.currency !== null) {
     const parsedCurrency = nonEmptyString(parsedBody.currency);
     if (!parsedCurrency) {
-      return jsonError(400, 'invalid_currency', 'INVALID_INPUT', 'currency must be a non-empty string.');
+      return jsonError(req, 400, 'invalid_currency', 'INVALID_INPUT', 'currency must be a non-empty string.');
     }
     currency = parsedCurrency;
   }
@@ -106,7 +122,7 @@ export async function POST(req: Request): Promise<Response> {
   if (parsedBody.provider !== undefined && parsedBody.provider !== null) {
     const parsedProvider = nonEmptyString(parsedBody.provider);
     if (!parsedProvider) {
-      return jsonError(400, 'invalid_provider', 'INVALID_INPUT', 'provider must be a non-empty string.');
+      return jsonError(req, 400, 'invalid_provider', 'INVALID_INPUT', 'provider must be a non-empty string.');
     }
     provider = parsedProvider;
   }
@@ -114,28 +130,32 @@ export async function POST(req: Request): Promise<Response> {
   let meta: Record<string, unknown> | undefined;
   if (parsedBody.meta !== undefined && parsedBody.meta !== null) {
     if (!isPlainRecord(parsedBody.meta)) {
-      return jsonError(400, 'invalid_meta', 'INVALID_INPUT', 'meta must be a plain object.');
+      return jsonError(req, 400, 'invalid_meta', 'INVALID_INPUT', 'meta must be a plain object.');
     }
     meta = parsedBody.meta;
   }
 
   if (status !== 'paid') {
-    return Response.json(
-      {
-        ok: true,
-        orderId,
-        scope,
-        targetKey,
-        status,
-        granted: false,
-        accessToken: null,
-      },
-      { status: 200 },
+    return withCors(
+      req,
+      Response.json(
+        {
+          ok: true,
+          orderId,
+          scope,
+          targetKey,
+          status,
+          granted: false,
+          accessToken: null,
+        },
+        { status: 200 },
+      ),
     );
   }
 
   if (!cfg.accessTokenSecret) {
     return jsonError(
+      req,
       503,
       'access_token_not_configured',
       'TOKEN_UNCONFIGURED',
@@ -164,15 +184,18 @@ export async function POST(req: Request): Promise<Response> {
     cfg.accessTokenSecret,
   );
 
-  return Response.json(
-    {
-      ok: true,
-      orderId: order.orderId,
-      scope: order.scope,
-      targetKey: order.targetKey,
-      idempotent: !inserted,
-      accessToken,
-    },
-    { status: 200 },
+  return withCors(
+    req,
+    Response.json(
+      {
+        ok: true,
+        orderId: order.orderId,
+        scope: order.scope,
+        targetKey: order.targetKey,
+        idempotent: !inserted,
+        accessToken,
+      },
+      { status: 200 },
+    ),
   );
 }

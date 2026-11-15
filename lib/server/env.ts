@@ -26,13 +26,25 @@ export interface ServerConfig {
   deepseekModel: string;
   interpretRateLimitPerMin: number;
   chartRateLimitPerMin: number;
+  allowedOrigins: readonly string[];
+  appPublicUrl: string;
+  billingProvider: string;
+  billingCheckoutBaseUrl?: string;
 }
+
+export type ServerEnvConfig = ServerConfig;
 
 const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat';
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
 const DEFAULT_INTERPRET_RATE_LIMIT_PER_MIN = 20;
 const DEFAULT_CHART_RATE_LIMIT_PER_MIN = 60;
+const DEFAULT_APP_PUBLIC_URL = 'http://localhost:3000';
+const DEFAULT_LOCAL_ALLOWED_ORIGINS: readonly string[] = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+];
+const DEFAULT_BILLING_PROVIDER = 'manual';
 
 function readOptionalEnv(name: string): string | undefined {
   const value = process.env[name];
@@ -67,11 +79,58 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function normalizeOriginEntry(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed === '*') return '*';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function parseAllowedOrigins(
+  rawAllowedOrigins: string | undefined,
+  configuredPublicUrl: string | undefined,
+): readonly string[] {
+  if (rawAllowedOrigins !== undefined) {
+    const parsed = new Set<string>();
+    for (const part of rawAllowedOrigins.split(',')) {
+      const normalized = normalizeOriginEntry(part);
+      if (normalized === '*') {
+        return ['*'];
+      }
+      if (normalized) {
+        parsed.add(normalized);
+      }
+    }
+    return [...parsed];
+  }
+
+  if (configuredPublicUrl) {
+    const normalized = normalizeOriginEntry(configuredPublicUrl);
+    if (normalized && normalized !== '*') {
+      return [normalized];
+    }
+  }
+
+  return [...DEFAULT_LOCAL_ALLOWED_ORIGINS];
+}
+
 /**
  * 动态读取当前 process.env 构造服务端配置。
  * 始终以最新环境变量为准，配合 resetServerConfigForTests 保证测试隔离。
  */
 export function getServerConfig(): ServerConfig {
+  const configuredPublicUrl =
+    readOptionalEnv('APP_PUBLIC_URL') ?? readOptionalEnv('NEXT_PUBLIC_SITE_URL');
+  const appPublicUrl = (configuredPublicUrl ?? DEFAULT_APP_PUBLIC_URL).replace(/\/+$/, '') || DEFAULT_APP_PUBLIC_URL;
+
   return {
     aiProvider: parseAiProvider(process.env.AI_PROVIDER),
     aiPaywallMode: parsePaywallMode(process.env.AI_PAYWALL_MODE),
@@ -98,7 +157,18 @@ export function getServerConfig(): ServerConfig {
       'CHART_RATE_LIMIT_PER_MIN',
       DEFAULT_CHART_RATE_LIMIT_PER_MIN,
     ),
+    allowedOrigins: parseAllowedOrigins(readOptionalEnv('ALLOWED_ORIGINS'), configuredPublicUrl),
+    appPublicUrl,
+    billingProvider: readOptionalEnv('BILLING_PROVIDER') ?? DEFAULT_BILLING_PROVIDER,
+    billingCheckoutBaseUrl: readOptionalEnv('BILLING_CHECKOUT_BASE_URL'),
   };
+}
+
+/**
+ * Alias for `getServerConfig()` matching `ServerEnvConfig` naming.
+ */
+export function getServerEnv(): ServerEnvConfig {
+  return getServerConfig();
 }
 
 /**

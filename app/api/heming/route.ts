@@ -1,4 +1,5 @@
 import { getServerConfig, type ServerConfig } from '@/lib/server/env';
+import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { extractBearerToken, verifyAccessToken } from '@/lib/server/access-token';
 import {
   checkRateLimit,
@@ -16,6 +17,7 @@ import {
   getCachedStreamText,
   getRedisClient,
   hashQuestion,
+  scopedQuestionHash,
   setCachedStreamText,
 } from '@/lib/server/cache';
 import {
@@ -28,13 +30,18 @@ import {
 } from '@/lib/server/llm';
 import { isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { analyzeSynastry } from '@/lib/ziwei/heming';
+import { normalizeLang, type SupportedLang } from '@/lib/ziwei/i18n';
+import { generateSynastryTeasers } from '@/lib/ziwei/paywall-teasers';
 import type { ZiweiChart } from '@/lib/ziwei/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const DEFAULT_HEMING_USER_PROMPT =
-  '请结合双方紫微斗数命盘结构、宫位共振与飞星四化，生成完整的合盘深度分析与相处建议。';
+const DEFAULT_HEMING_USER_PROMPTS: Record<SupportedLang, string> = {
+  zh: '请结合双方紫微斗数命盘结构、宫位共振与飞星四化，生成完整的合盘深度分析与相处建议。',
+  ru: 'Проведи полный глубокий разбор совместимости двух карт Цзы Вэй Доу Шу: резонанс дворцов, перекрёстные Сы-Хуа, сильные стороны, зоны трения и практические рекомендации.',
+  en: 'Provide a comprehensive Zi Wei Dou Shu synastry analysis covering palace resonance, cross-chart Si Hua dynamics, strengths, friction points, and practical relationship guidance.',
+};
 
 type ParseResult<T> = { ok: true; value: T } | { ok: false; message: string };
 
@@ -43,19 +50,23 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function jsonError(
+  req: Request,
   status: number,
   error: string,
   code: string,
   message?: string,
   headers?: HeadersInit,
 ): Response {
-  return Response.json(
-    {
-      error,
-      code,
-      ...(message ? { message } : {}),
-    },
-    { status, headers },
+  return withCors(
+    req,
+    Response.json(
+      {
+        error,
+        code,
+        ...(message ? { message } : {}),
+      },
+      { status, headers },
+    ),
   );
 }
 
@@ -89,6 +100,16 @@ function resolveModelName(cfg: ServerConfig): string | undefined {
     case 'openai-compatible':
       return cfg.openaiModel;
   }
+}
+
+function parseLang(raw: unknown): ParseResult<SupportedLang> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: 'zh' };
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false, message: "lang must be 'ru', 'zh', or 'en'" };
+  }
+  return { ok: true, value: normalizeLang(raw, 'zh') };
 }
 
 function parseChart(raw: unknown, label: string): ParseResult<ZiweiChart> {
@@ -175,42 +196,51 @@ function parseTargetYear(raw: unknown): ParseResult<number | undefined> {
   return { ok: true, value: raw };
 }
 
+export async function OPTIONS(req: Request): Promise<Response> {
+  return handleCorsPreflight(req);
+}
+
 export async function POST(req: Request): Promise<Response> {
   let rawBody: unknown;
   try {
     rawBody = await req.json();
   } catch {
-    return jsonError(400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
+    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
   }
 
   if (!isPlainRecord(rawBody)) {
-    return jsonError(400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
+    return jsonError(req, 400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
   }
 
+  const langParsed = parseLang(rawBody.lang);
+  if (!langParsed.ok) {
+    return jsonError(req, 400, 'invalid_lang', 'INVALID_INPUT', langParsed.message);
+  }
   const chartAParsed = parseChart(rawBody.chartA, 'chartA');
   if (!chartAParsed.ok) {
-    return jsonError(400, 'invalid_chart', 'INVALID_INPUT', chartAParsed.message);
+    return jsonError(req, 400, 'invalid_chart', 'INVALID_INPUT', chartAParsed.message);
   }
   const chartBParsed = parseChart(rawBody.chartB, 'chartB');
   if (!chartBParsed.ok) {
-    return jsonError(400, 'invalid_chart', 'INVALID_INPUT', chartBParsed.message);
+    return jsonError(req, 400, 'invalid_chart', 'INVALID_INPUT', chartBParsed.message);
   }
   const targetYearParsed = parseTargetYear(rawBody.targetYear);
   if (!targetYearParsed.ok) {
-    return jsonError(400, 'invalid_target_year', 'INVALID_INPUT', targetYearParsed.message);
+    return jsonError(req, 400, 'invalid_target_year', 'INVALID_INPUT', targetYearParsed.message);
   }
 
   if (rawBody.question !== undefined && rawBody.question !== null && typeof rawBody.question !== 'string') {
-    return jsonError(400, 'invalid_question', 'INVALID_INPUT', 'question must be a string.');
+    return jsonError(req, 400, 'invalid_question', 'INVALID_INPUT', 'question must be a string.');
   }
   if (
     rawBody.previewOnly !== undefined &&
     rawBody.previewOnly !== null &&
     typeof rawBody.previewOnly !== 'boolean'
   ) {
-    return jsonError(400, 'invalid_preview_flag', 'INVALID_INPUT', 'previewOnly must be a boolean.');
+    return jsonError(req, 400, 'invalid_preview_flag', 'INVALID_INPUT', 'previewOnly must be a boolean.');
   }
 
+  const lang = langParsed.value;
   const chartA = chartAParsed.value;
   const chartB = chartBParsed.value;
   const targetYear = targetYearParsed.value;
@@ -222,15 +252,22 @@ export async function POST(req: Request): Promise<Response> {
   const pairKey = canonicalPairKey(chartA, chartB, targetYear);
   const synastry = analyzeSynastry(chartA, chartB, { targetYear });
 
-  // Zero-LLM deterministic synastry preview
+  // Zero-LLM deterministic synastry preview with localized teasers & overview
   if (rawBody.previewOnly === true) {
-    return Response.json(
-      {
-        ok: true,
-        pairKey,
-        synastry,
-      },
-      { status: 200 },
+    const teasers = generateSynastryTeasers(synastry, lang);
+    return withCors(
+      req,
+      Response.json(
+        {
+          ok: true,
+          lang,
+          pairKey,
+          synastry,
+          overview: teasers.overview,
+          teasers,
+        },
+        { status: 200 },
+      ),
     );
   }
 
@@ -244,6 +281,7 @@ export async function POST(req: Request): Promise<Response> {
   });
   if (!rl.allowed) {
     return jsonError(
+      req,
       429,
       'rate_limit_exceeded',
       'RATE_LIMITED',
@@ -253,6 +291,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // Strict paywall guard BEFORE cache read or LLM invocation.
+  // Entitlement (`pairKey`) stays language-agnostic across UI language switches.
   if (cfg.aiPaywallMode === 'strict') {
     const token = extractBearerToken(req, rawBody.accessToken);
     let authorized = false;
@@ -263,44 +302,54 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     if (!authorized) {
-      return Response.json(
-        {
-          error: 'payment_required',
-          code: 'PAYWALL_LOCKED',
-          pairKey,
-        },
-        { status: 402 },
+      return withCors(
+        req,
+        Response.json(
+          {
+            error: 'payment_required',
+            code: 'PAYWALL_LOCKED',
+            pairKey,
+          },
+          { status: 402 },
+        ),
       );
     }
   }
 
   const questionHash = hashQuestion(question);
-  const redisKey = buildSynastryRedisKey(pairKey, questionHash);
+  const scopedQHash = scopedQuestionHash(questionHash, lang);
+  const redisKey = buildSynastryRedisKey(pairKey, questionHash, lang);
 
   const redisHit = await getCachedStreamText(redisKey);
   if (redisHit !== null) {
-    return new Response(createSseFromCachedText(redisHit), {
-      status: 200,
-      headers: {
-        ...SSE_HEADERS,
-        'X-Cache': 'HIT',
-      },
-    });
+    return withCors(
+      req,
+      new Response(createSseFromCachedText(redisHit), {
+        status: 200,
+        headers: {
+          ...SSE_HEADERS,
+          'X-Cache': 'HIT',
+        },
+      }),
+    );
   }
 
-  const pgHit = await getSynastryInterpretation(pairKey, questionHash);
+  const pgHit = await getSynastryInterpretation(pairKey, scopedQHash);
   if (pgHit !== null) {
     await setCachedStreamText(redisKey, pgHit.content).catch(() => undefined);
-    return new Response(createSseFromCachedText(pgHit.content), {
-      status: 200,
-      headers: {
-        ...SSE_HEADERS,
-        'X-Cache': 'HIT',
-      },
-    });
+    return withCors(
+      req,
+      new Response(createSseFromCachedText(pgHit.content), {
+        status: 200,
+        headers: {
+          ...SSE_HEADERS,
+          'X-Cache': 'HIT',
+        },
+      }),
+    );
   }
 
-  const systemPrompt = buildSynastrySystemPrompt(chartA, chartB, synastry, question);
+  const systemPrompt = buildSynastrySystemPrompt(chartA, chartB, synastry, question, lang);
   const model = resolveModelName(cfg);
 
   try {
@@ -309,9 +358,10 @@ export async function POST(req: Request): Promise<Response> {
       messages: [
         {
           role: 'user',
-          content: question ?? DEFAULT_HEMING_USER_PROMPT,
+          content: question ?? DEFAULT_HEMING_USER_PROMPTS[lang],
         },
       ],
+      lang,
       signal: req.signal,
       onComplete: async (fullText: string) => {
         if (fullText.trim().length === 0) return;
@@ -319,7 +369,7 @@ export async function POST(req: Request): Promise<Response> {
           setCachedStreamText(redisKey, fullText).catch(() => undefined),
           saveSynastryInterpretation({
             pairKey,
-            questionHash,
+            questionHash: scopedQHash,
             content: fullText,
             provider: cfg.aiProvider,
             model,
@@ -328,16 +378,20 @@ export async function POST(req: Request): Promise<Response> {
       },
     });
 
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        ...SSE_HEADERS,
-        'X-Cache': 'MISS',
-      },
-    });
+    return withCors(
+      req,
+      new Response(stream, {
+        status: 200,
+        headers: {
+          ...SSE_HEADERS,
+          'X-Cache': 'MISS',
+        },
+      }),
+    );
   } catch (err) {
     if (err instanceof LlmConfigError) {
       return jsonError(
+        req,
         503,
         'llm_not_configured',
         err.code,
@@ -346,12 +400,19 @@ export async function POST(req: Request): Promise<Response> {
     }
     if (err instanceof LlmUpstreamError) {
       return jsonError(
+        req,
         502,
         'llm_upstream_error',
         err.code,
         'Upstream AI synastry provider returned an error.',
       );
     }
-    return jsonError(500, 'internal_error', 'INTERNAL_ERROR', 'Unexpected error starting stream.');
+    return jsonError(
+      req,
+      500,
+      'internal_error',
+      'INTERNAL_ERROR',
+      'Unexpected error starting stream.',
+    );
   }
 }
