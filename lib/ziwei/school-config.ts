@@ -42,14 +42,14 @@ export type ChangshengSchool = 'yin-yang-shun-ni' | 'shui-tu' | 'huo-tu';
 /** 9. 晚子时处理 */
 export type LateZishi =
   | 'next-day'           // 视为次日（主流默认口径 + 我们当前）
-  | 'current-day'        // 视为当日（倪师派）
+  | 'current-day'        // 视为当日（不跨日排盘口径）
   | 'all-current'        // 日柱当日时柱当日（八字）
   | 'day-cur-time-next'; // 日柱当日时柱次日（八字）
 
-/** 10. 闰月处理（用户反馈：倪师派要求闰月归下月）*/
+/** 10. 闰月处理（各流派口径：分半 / 归下月 / 归本月 / 保持闰月）*/
 export type LeapMonth =
   | 'split'         // 分半（前 15 天归上月，后 15 天归下月）— ★我们默认 = 主流排盘默认口径「月中分界」（2026-09-05 150 组金标准盘对照：9 张闰月后半月盘唯此口径逐星全同）
-  | 'next-month'    // 整月归下月（倪师派：闰四月当五月）
+  | 'next-month'    // 整月归下月（传统流派口径：闰四月当五月）
   | 'prev-month'    // 整月当本月普通月（闰四月当四月）— 可选口径「视为本月」；早先 2.6 万盘验证针对的是另一套参照引擎，与金标准盘默认口径不一致
   | 'origin-month'; // 不调整（闰四月仍标闰月，iztro fixLeap=false）
 
@@ -262,7 +262,7 @@ export const SCHOOL_OPTIONS = {
   ],
   lateZishi: [
     { value: 'next-day', label: '视为次日', desc: '默认 · 主流做法' },
-    { value: 'current-day', label: '视为当日', desc: '倪师派' },
+    { value: 'current-day', label: '视为当日', desc: '晚子时不跨日（传统当日口径）' },
     { value: 'all-current', label: '日柱当日 / 时柱当日（八字）' },
     { value: 'day-cur-time-next', label: '日柱当日 / 时柱次日（八字）' },
   ],
@@ -271,7 +271,7 @@ export const SCHOOL_OPTIONS = {
   leapMonth: [
     { value: 'split', label: '视为分半', desc: '默认 · 「月中分界」，与主流排盘软件默认一致（前 15 天归本月 / 后 15 天归下月，150 组对照盘验证）' },
     { value: 'prev-month', label: '视为本月', desc: '闰四月整月当四月普通月排' },
-    { value: 'next-month', label: '视为下月', desc: '倪师派（闰四月整月当五月排）' },
+    { value: 'next-month', label: '视为下月', desc: '传统整月进位口径（闰四月整月当五月排）' },
     { value: 'origin-month', label: '保持闰月', desc: '不调整，闰四月仍标闰月' },
   ],
 } as const;

@@ -107,7 +107,7 @@ export const TIANMA_TABLE: Record<number, number> = {
 // 其余星曜（武曲/廉贞/贪狼/巨门/破军/文昌/火星/陀罗）iztro 默认值与全书一致，无需覆写。
 // 旧 STAR_BRIGHTNESS 是死代码（从未被引用），已在 2026-05-08 清理。
 
-// 主星描述（倪师体系）
+// 主星描述（传统三合体系核心意象）
 export const STAR_DESCRIPTIONS: Record<string, { keywords: string; nature: string; element: string }> = {
   '紫微': { keywords: '帝王·尊贵·独立', nature: '中性偏吉', element: '土' },
   '天机': { keywords: '智慧·机变·谋略', nature: '吉星', element: '木' },

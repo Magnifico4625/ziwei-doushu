@@ -1,5 +1,10 @@
+import type { SupportedLang } from './i18n';
+
 export interface CityInfo {
   name: string;
+  nameRu?: string;
+  nameEn?: string;
+  aliases?: string[];
   longitude: number; // degrees East (negative for West)
   utcOffsetMinutes?: number; // standard (winter) timezone offset in minutes (default 480 = UTC+8)
   timeZone?: string; // IANA time zone identifier (e.g. 'America/New_York', 'Europe/Moscow')
@@ -24,7 +29,7 @@ export const PROVINCES: ProvinceInfo[] = [
       //   保留「北京」市级条目在首位：老用户历史命盘存的是它，删掉会对不上。
       //   全市经度跨度 115.98–117.12（延庆↔平谷），约 1.14°，真太阳时最大差约 4.6 分钟——
       //   出生时刻落在时辰交界 ±5 分钟内时，选市中心与选边缘区会得到不同时辰，整盘皆变。
-      { name: '北京', longitude: 116.4 },
+      { name: '北京', nameRu: 'Пекин', nameEn: 'Beijing', aliases: ['Peking'], longitude: 116.4 },
       { name: '东城', longitude: 116.42 },
       { name: '西城', longitude: 116.37 },
       { name: '朝阳', longitude: 116.49 },
@@ -47,7 +52,7 @@ export const PROVINCES: ProvinceInfo[] = [
     name: '天津市',
     cities: [
       // 跨度 116.97–117.83（静海↔宁河），约 0.86°，真太阳时最大差约 3.4 分钟
-      { name: '天津', longitude: 117.2 },
+      { name: '天津', nameRu: 'Тяньцзинь', nameEn: 'Tianjin', aliases: ['Tientsin'], longitude: 117.2 },
       { name: '和平', longitude: 117.21 },
       { name: '河东', longitude: 117.24 },
       { name: '河西', longitude: 117.22 },
@@ -70,7 +75,7 @@ export const PROVINCES: ProvinceInfo[] = [
     name: '上海市',
     cities: [
       // 跨度 121.12–121.56（青浦↔浦东新区），约 0.44°，真太阳时最大差约 1.8 分钟
-      { name: '上海', longitude: 121.5 },
+      { name: '上海', nameRu: 'Шанхай', nameEn: 'Shanghai', longitude: 121.5 },
       { name: '黄浦', longitude: 121.49 },
       { name: '徐汇', longitude: 121.44 },
       { name: '长宁', longitude: 121.42 },
@@ -93,7 +98,7 @@ export const PROVINCES: ProvinceInfo[] = [
     name: '重庆市',
     cities: [
       // 主城九区
-      { name: '渝中', longitude: 106.6 },
+      { name: '渝中', nameRu: 'Юйчжун (Чунцин)', nameEn: 'Yuzhong (Chongqing)', aliases: ['重庆', 'Чунцин', 'Chongqing', 'Юйчжун', 'Yuzhong'], longitude: 106.6 },
       { name: '大渡口', longitude: 106.5 },
       { name: '江北', longitude: 106.6 },
       { name: '沙坪坝', longitude: 106.5 },
@@ -141,7 +146,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '河北省',
     cities: [
-      { name: '石家庄', longitude: 114.5 },
+      { name: '石家庄', nameRu: 'Шицзячжуан', nameEn: 'Shijiazhuang', longitude: 114.5 },
       { name: '保定', longitude: 115.5 },
       { name: '唐山', longitude: 118.2 },
       { name: '秦皇岛', longitude: 119.6 },
@@ -157,7 +162,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '山西省',
     cities: [
-      { name: '太原', longitude: 112.6 },
+      { name: '太原', nameRu: 'Тайюань', nameEn: 'Taiyuan', longitude: 112.6 },
       { name: '大同', longitude: 113.3 },
       { name: '长治', longitude: 113.1 },
       { name: '晋城', longitude: 112.9 },
@@ -173,7 +178,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '内蒙古自治区',
     cities: [
-      { name: '呼和浩特', longitude: 111.7 },
+      { name: '呼和浩特', nameRu: 'Хух-Хото', nameEn: 'Hohhot', longitude: 111.7 },
       { name: '包头', longitude: 110.0 },
       { name: '鄂尔多斯', longitude: 109.8 },
       { name: '赤峰', longitude: 118.9 },
@@ -192,8 +197,8 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '辽宁省',
     cities: [
-      { name: '沈阳', longitude: 123.4 },
-      { name: '大连', longitude: 121.6 },
+      { name: '沈阳', nameRu: 'Шэньян', nameEn: 'Shenyang', aliases: ['Мукден', 'Mukden'], longitude: 123.4 },
+      { name: '大连', nameRu: 'Далянь', nameEn: 'Dalian', aliases: ['Дальний', 'Dairen'], longitude: 121.6 },
       { name: '鞍山', longitude: 122.9 },
       { name: '抚顺', longitude: 123.9 },
       { name: '本溪', longitude: 123.8 },
@@ -211,7 +216,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '吉林省',
     cities: [
-      { name: '长春', longitude: 125.4 },
+      { name: '长春', nameRu: 'Чанчунь', nameEn: 'Changchun', longitude: 125.4 },
       { name: '吉林', longitude: 126.6 },
       { name: '四平', longitude: 124.4 },
       { name: '辽源', longitude: 125.1 },
@@ -225,7 +230,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '黑龙江省',
     cities: [
-      { name: '哈尔滨', longitude: 126.5 },
+      { name: '哈尔滨', nameRu: 'Харбин', nameEn: 'Harbin', longitude: 126.5 },
       { name: '齐齐哈尔', longitude: 123.9 },
       { name: '牡丹江', longitude: 129.6 },
       { name: '佳木斯', longitude: 130.4 },
@@ -246,9 +251,9 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '江苏省',
     cities: [
-      { name: '南京', longitude: 118.8 },
-      { name: '苏州', longitude: 120.6 },
-      { name: '无锡', longitude: 120.3 },
+      { name: '南京', nameRu: 'Нанкин', nameEn: 'Nanjing', aliases: ['Nanking'], longitude: 118.8 },
+      { name: '苏州', nameRu: 'Сучжоу', nameEn: 'Suzhou', longitude: 120.6 },
+      { name: '无锡', nameRu: 'Уси', nameEn: 'Wuxi', longitude: 120.3 },
       { name: '常州', longitude: 119.9 },
       { name: '南通', longitude: 120.9 },
       { name: '扬州', longitude: 119.4 },
@@ -264,9 +269,9 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '浙江省',
     cities: [
-      { name: '杭州', longitude: 120.1 },
-      { name: '宁波', longitude: 121.6 },
-      { name: '温州', longitude: 120.7 },
+      { name: '杭州', nameRu: 'Ханчжоу', nameEn: 'Hangzhou', longitude: 120.1 },
+      { name: '宁波', nameRu: 'Нинбо', nameEn: 'Ningbo', longitude: 121.6 },
+      { name: '温州', nameRu: 'Вэньчжоу', nameEn: 'Wenzhou', longitude: 120.7 },
       { name: '嘉兴', longitude: 120.8 },
       { name: '湖州', longitude: 120.1 },
       { name: '绍兴', longitude: 120.6 },
@@ -280,7 +285,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '安徽省',
     cities: [
-      { name: '合肥', longitude: 117.3 },
+      { name: '合肥', nameRu: 'Хэфэй', nameEn: 'Hefei', longitude: 117.3 },
       { name: '芜湖', longitude: 118.4 },
       { name: '蚌埠', longitude: 117.4 },
       { name: '淮南', longitude: 117.0 },
@@ -301,11 +306,11 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '福建省',
     cities: [
-      { name: '福州', longitude: 119.3 },
-      { name: '厦门', longitude: 118.1 },
+      { name: '福州', nameRu: 'Фучжоу', nameEn: 'Fuzhou', longitude: 119.3 },
+      { name: '厦门', nameRu: 'Сямэнь', nameEn: 'Xiamen', aliases: ['Amoy'], longitude: 118.1 },
       { name: '莆田', longitude: 119.0 },
       { name: '三明', longitude: 117.6 },
-      { name: '泉州', longitude: 118.7 },
+      { name: '泉州', nameRu: 'Цюаньчжоу', nameEn: 'Quanzhou', longitude: 118.7 },
       { name: '漳州', longitude: 117.6 },
       { name: '南平', longitude: 118.2 },
       { name: '龙岩', longitude: 117.0 },
@@ -315,7 +320,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '江西省',
     cities: [
-      { name: '南昌', longitude: 115.9 },
+      { name: '南昌', nameRu: 'Наньчан', nameEn: 'Nanchang', longitude: 115.9 },
       { name: '景德镇', longitude: 117.2 },
       { name: '萍乡', longitude: 113.9 },
       { name: '九江', longitude: 116.0 },
@@ -331,12 +336,12 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '山东省',
     cities: [
-      { name: '济南', longitude: 117.0 },
-      { name: '青岛', longitude: 120.4 },
+      { name: '济南', nameRu: 'Цзинань', nameEn: 'Jinan', longitude: 117.0 },
+      { name: '青岛', nameRu: 'Циндао', nameEn: 'Qingdao', aliases: ['Tsingtao'], longitude: 120.4 },
       { name: '淄博', longitude: 118.1 },
       { name: '枣庄', longitude: 117.6 },
       { name: '东营', longitude: 118.7 },
-      { name: '烟台', longitude: 121.4 },
+      { name: '烟台', nameRu: 'Яньтай', nameEn: 'Yantai', longitude: 121.4 },
       { name: '潍坊', longitude: 119.1 },
       { name: '济宁', longitude: 116.6 },
       { name: '泰安', longitude: 117.1 },
@@ -354,9 +359,9 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '河南省',
     cities: [
-      { name: '郑州', longitude: 113.6 },
+      { name: '郑州', nameRu: 'Чжэнчжоу', nameEn: 'Zhengzhou', longitude: 113.6 },
       { name: '开封', longitude: 114.3 },
-      { name: '洛阳', longitude: 112.5 },
+      { name: '洛阳', nameRu: 'Лоян', nameEn: 'Luoyang', longitude: 112.5 },
       { name: '平顶山', longitude: 113.3 },
       { name: '安阳', longitude: 114.4 },
       { name: '鹤壁', longitude: 114.3 },
@@ -377,7 +382,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '湖北省',
     cities: [
-      { name: '武汉', longitude: 114.3 },
+      { name: '武汉', nameRu: 'Ухань', nameEn: 'Wuhan', longitude: 114.3 },
       { name: '黄石', longitude: 115.0 },
       { name: '十堰', longitude: 110.8 },
       { name: '宜昌', longitude: 111.3 },
@@ -400,7 +405,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '湖南省',
     cities: [
-      { name: '长沙', longitude: 113.0 },
+      { name: '长沙', nameRu: 'Чанша', nameEn: 'Changsha', longitude: 113.0 },
       { name: '株洲', longitude: 113.1 },
       { name: '湘潭', longitude: 112.9 },
       { name: '衡阳', longitude: 112.6 },
@@ -421,11 +426,11 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '广东省',
     cities: [
-      { name: '广州', longitude: 113.3 },
-      { name: '深圳', longitude: 114.1 },
-      { name: '珠海', longitude: 113.6 },
-      { name: '佛山', longitude: 113.1 },
-      { name: '东莞', longitude: 113.8 },
+      { name: '广州', nameRu: 'Гуанчжоу', nameEn: 'Guangzhou', aliases: ['Кантон', 'Canton'], longitude: 113.3 },
+      { name: '深圳', nameRu: 'Шэньчжэнь', nameEn: 'Shenzhen', longitude: 114.1 },
+      { name: '珠海', nameRu: 'Чжухай', nameEn: 'Zhuhai', longitude: 113.6 },
+      { name: '佛山', nameRu: 'Фошань', nameEn: 'Foshan', longitude: 113.1 },
+      { name: '东莞', nameRu: 'Дунгуань', nameEn: 'Dongguan', longitude: 113.8 },
       { name: '中山', longitude: 113.4 },
       { name: '江门', longitude: 113.1 },
       { name: '惠州', longitude: 114.4 },
@@ -447,9 +452,9 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '广西壮族自治区',
     cities: [
-      { name: '南宁', longitude: 108.3 },
+      { name: '南宁', nameRu: 'Наньнин', nameEn: 'Nanning', longitude: 108.3 },
       { name: '柳州', longitude: 109.4 },
-      { name: '桂林', longitude: 110.3 },
+      { name: '桂林', nameRu: 'Гуйлинь', nameEn: 'Guilin', longitude: 110.3 },
       { name: '梧州', longitude: 111.3 },
       { name: '北海', longitude: 109.1 },
       { name: '防城港', longitude: 108.4 },
@@ -466,8 +471,8 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '海南省',
     cities: [
-      { name: '海口', longitude: 110.3 },
-      { name: '三亚', longitude: 109.5 },
+      { name: '海口', nameRu: 'Хайкоу', nameEn: 'Haikou', longitude: 110.3 },
+      { name: '三亚', nameRu: 'Санья', nameEn: 'Sanya', longitude: 109.5 },
       { name: '儋州', longitude: 109.6 },
       { name: '文昌', longitude: 110.8 },
       { name: '琼海', longitude: 110.5 },
@@ -493,7 +498,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '四川省',
     cities: [
-      { name: '成都', longitude: 104.1 },
+      { name: '成都', nameRu: 'Чэнду', nameEn: 'Chengdu', longitude: 104.1 },
       { name: '绵阳', longitude: 104.7 },
       { name: '德阳', longitude: 104.4 },
       { name: '宜宾', longitude: 104.6 },
@@ -519,7 +524,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '贵州省',
     cities: [
-      { name: '贵阳', longitude: 106.7 },
+      { name: '贵阳', nameRu: 'Гуйян', nameEn: 'Guiyang', longitude: 106.7 },
       { name: '遵义', longitude: 106.9 },
       { name: '六盘水', longitude: 104.8 },
       { name: '安顺', longitude: 105.9 },
@@ -533,7 +538,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '云南省',
     cities: [
-      { name: '昆明', longitude: 102.7 },
+      { name: '昆明', nameRu: 'Куньмин', nameEn: 'Kunming', longitude: 102.7 },
       { name: '曲靖', longitude: 103.8 },
       { name: '玉溪', longitude: 102.5 },
       { name: '保山', longitude: 99.2 },
@@ -554,7 +559,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '西藏自治区',
     cities: [
-      { name: '拉萨', longitude: 91.1 },
+      { name: '拉萨', nameRu: 'Лхаса', nameEn: 'Lhasa', longitude: 91.1 },
       { name: '日喀则', longitude: 88.9 },
       { name: '昌都', longitude: 97.2 },
       { name: '林芝', longitude: 94.4 },
@@ -568,7 +573,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '陕西省',
     cities: [
-      { name: '西安', longitude: 108.9 },
+      { name: '西安', nameRu: 'Сиань', nameEn: 'Xi\'an', aliases: ['Xian'], longitude: 108.9 },
       { name: '咸阳', longitude: 108.7 },
       { name: '宝鸡', longitude: 107.2 },
       { name: '铜川', longitude: 109.1 },
@@ -583,7 +588,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '甘肃省',
     cities: [
-      { name: '兰州', longitude: 103.8 },
+      { name: '兰州', nameRu: 'Ланьчжоу', nameEn: 'Lanzhou', longitude: 103.8 },
       { name: '嘉峪关', longitude: 98.3 },
       { name: '金昌', longitude: 102.2 },
       { name: '白银', longitude: 104.2 },
@@ -602,7 +607,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '青海省',
     cities: [
-      { name: '西宁', longitude: 101.8 },
+      { name: '西宁', nameRu: 'Синин', nameEn: 'Xining', longitude: 101.8 },
       { name: '海东', longitude: 102.1 },
       { name: '格尔木', longitude: 94.9 },
       { name: '德令哈', longitude: 97.4 },
@@ -617,7 +622,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '宁夏回族自治区',
     cities: [
-      { name: '银川', longitude: 106.3 },
+      { name: '银川', nameRu: 'Иньчуань', nameEn: 'Yinchuan', longitude: 106.3 },
       { name: '石嘴山', longitude: 106.4 },
       { name: '吴忠', longitude: 106.2 },
       { name: '固原', longitude: 106.3 },
@@ -627,7 +632,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '新疆维吾尔自治区',
     cities: [
-      { name: '乌鲁木齐', longitude: 87.6 },
+      { name: '乌鲁木齐', nameRu: 'Урумчи', nameEn: 'Urumqi', longitude: 87.6 },
       { name: '克拉玛依', longitude: 84.9 },
       { name: '吐鲁番', longitude: 89.2 },
       { name: '哈密', longitude: 93.5 },
@@ -636,7 +641,7 @@ export const PROVINCES: ProvinceInfo[] = [
       { name: '巴音郭楞', longitude: 86.2 },
       { name: '阿克苏', longitude: 80.3 },
       { name: '克孜勒苏', longitude: 76.2 },
-      { name: '喀什', longitude: 75.9 },
+      { name: '喀什', nameRu: 'Кашгар', nameEn: 'Kashgar', longitude: 75.9 },
       { name: '和田', longitude: 79.9 },
       { name: '伊犁', longitude: 81.3 },
       { name: '塔城', longitude: 83.0 },
@@ -662,7 +667,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '香港特别行政区',
     cities: [
-      { name: '香港', longitude: 114.2 },
+      { name: '香港', nameRu: 'Гонконг', nameEn: 'Hong Kong', aliases: ['HK', 'Сянган'], longitude: 114.2 },
       { name: '九龙', longitude: 114.2 },
       { name: '新界', longitude: 114.2 },
     ],
@@ -670,7 +675,7 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '澳门特别行政区',
     cities: [
-      { name: '澳门', longitude: 113.5 },
+      { name: '澳门', nameRu: 'Макао', nameEn: 'Macau', aliases: ['Macao', 'Аомэнь'], longitude: 113.5 },
       { name: '氹仔', longitude: 113.6 },
       { name: '路环', longitude: 113.6 },
     ],
@@ -678,12 +683,12 @@ export const PROVINCES: ProvinceInfo[] = [
   {
     name: '台湾省',
     cities: [
-      { name: '台北', longitude: 121.5 },
-      { name: '新北', longitude: 121.5 },
-      { name: '桃园', longitude: 121.3 },
-      { name: '台中', longitude: 120.7 },
-      { name: '台南', longitude: 120.2 },
-      { name: '高雄', longitude: 120.3 },
+      { name: '台北', nameRu: 'Тайбэй', nameEn: 'Taipei', longitude: 121.5 },
+      { name: '新北', nameRu: 'Синьбэй', nameEn: 'New Taipei', longitude: 121.5 },
+      { name: '桃园', nameRu: 'Таоюань', nameEn: 'Taoyuan', longitude: 121.3 },
+      { name: '台中', nameRu: 'Тайчжун', nameEn: 'Taichung', longitude: 120.7 },
+      { name: '台南', nameRu: 'Тайнань', nameEn: 'Tainan', longitude: 120.2 },
+      { name: '高雄', nameRu: 'Гаосюн', nameEn: 'Kaohsiung', longitude: 120.3 },
       { name: '基隆', longitude: 121.7 },
       { name: '新竹', longitude: 120.9 },
       { name: '嘉义', longitude: 120.4 },
@@ -706,71 +711,98 @@ export const PROVINCES: ProvinceInfo[] = [
     name: '海外 / 国际',
     cities: [
       // 俄罗斯（覆盖全部 11 个标准时区及历史独立时区枢纽）
-      { name: '莫斯科', longitude: 37.6, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-      { name: '圣彼得堡', longitude: 30.3, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-      { name: '加里宁格勒', longitude: 20.5, utcOffsetMinutes: 120, timeZone: 'Europe/Kaliningrad' },
-      { name: '喀山', longitude: 49.1, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-      { name: '下诺夫哥罗德', longitude: 44.0, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-      { name: '克拉斯诺达尔', longitude: 39.0, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-      { name: '索契', longitude: 39.72, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-      { name: '顿河畔罗斯托夫', longitude: 39.7, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
-      { name: '伏尔加格勒', longitude: 44.5, utcOffsetMinutes: 180, timeZone: 'Europe/Volgograd' },
-      { name: '萨马拉', longitude: 50.2, utcOffsetMinutes: 240, timeZone: 'Europe/Samara' },
-      { name: '叶卡捷琳堡', longitude: 60.6, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
-      { name: '乌法', longitude: 56.0, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
-      { name: '车里雅宾斯克', longitude: 61.4, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
-      { name: '彼尔姆', longitude: 56.2, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
-      { name: '鄂木斯克', longitude: 73.4, utcOffsetMinutes: 360, timeZone: 'Asia/Omsk' },
-      { name: '新西伯利亚', longitude: 82.9, utcOffsetMinutes: 420, timeZone: 'Asia/Novosibirsk' },
-      { name: '克拉斯诺亚尔斯克', longitude: 92.9, utcOffsetMinutes: 420, timeZone: 'Asia/Krasnoyarsk' },
-      { name: '伊尔库茨克', longitude: 104.3, utcOffsetMinutes: 480, timeZone: 'Asia/Irkutsk' },
-      { name: '雅库茨克', longitude: 129.7, utcOffsetMinutes: 540, timeZone: 'Asia/Yakutsk' },
-      { name: '符拉迪沃斯托克', longitude: 131.9, utcOffsetMinutes: 600, timeZone: 'Asia/Vladivostok' },
-      { name: '哈巴罗夫斯克', longitude: 135.1, utcOffsetMinutes: 600, timeZone: 'Asia/Vladivostok' },
-      { name: '南萨哈林斯克', longitude: 142.7, utcOffsetMinutes: 660, timeZone: 'Asia/Sakhalin' },
-      { name: '堪察加彼得罗巴甫洛夫斯克', longitude: 158.6, utcOffsetMinutes: 720, timeZone: 'Asia/Kamchatka' },
+      { name: '莫斯科', nameRu: 'Москва', nameEn: 'Moscow', aliases: ['МСК', 'MSK', 'Moskva'], longitude: 37.6, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '圣彼得堡', nameRu: 'Санкт-Петербург', nameEn: 'Saint Petersburg', aliases: ['СПб', 'SPB', 'Питер', 'St. Petersburg', 'St Petersburg', 'Ленинград', 'Leningrad', 'Петроград'], longitude: 30.3, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '加里宁格勒', nameRu: 'Калининград', nameEn: 'Kaliningrad', aliases: ['Кёнигсберг', 'Koenigsberg'], longitude: 20.5, utcOffsetMinutes: 120, timeZone: 'Europe/Kaliningrad' },
+      { name: '喀山', nameRu: 'Казань', nameEn: 'Kazan', longitude: 49.1, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '下诺夫哥罗德', nameRu: 'Нижний Новгород', nameEn: 'Nizhny Novgorod', aliases: ['Горький', 'Gorky'], longitude: 44.0, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '克拉斯诺达尔', nameRu: 'Краснодар', nameEn: 'Krasnodar', aliases: ['Екатеринодар'], longitude: 39.0, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '索契', nameRu: 'Сочи', nameEn: 'Sochi', longitude: 39.72, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '顿河畔罗斯托夫', nameRu: 'Ростов-на-Дону', nameEn: 'Rostov-on-Don', aliases: ['Ростов', 'Rostov'], longitude: 39.7, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+      { name: '伏尔加格勒', nameRu: 'Волгоград', nameEn: 'Volgograd', aliases: ['Сталинград', 'Stalingrad', 'Царицын'], longitude: 44.5, utcOffsetMinutes: 180, timeZone: 'Europe/Volgograd' },
+      { name: '萨马拉', nameRu: 'Самара', nameEn: 'Samara', aliases: ['Куйбышев', 'Kuibyshev'], longitude: 50.2, utcOffsetMinutes: 240, timeZone: 'Europe/Samara' },
+      { name: '叶卡捷琳堡', nameRu: 'Екатеринбург', nameEn: 'Yekaterinburg', aliases: ['Екб', 'Ekb', 'Ekaterinburg', 'Свердловск', 'Sverdlovsk'], longitude: 60.6, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
+      { name: '乌法', nameRu: 'Уфа', nameEn: 'Ufa', longitude: 56.0, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
+      { name: '车里雅宾斯克', nameRu: 'Челябинск', nameEn: 'Chelyabinsk', longitude: 61.4, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
+      { name: '彼尔姆', nameRu: 'Пермь', nameEn: 'Perm', longitude: 56.2, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
+      { name: '鄂木斯克', nameRu: 'Омск', nameEn: 'Omsk', longitude: 73.4, utcOffsetMinutes: 360, timeZone: 'Asia/Omsk' },
+      { name: '新西伯利亚', nameRu: 'Новосибирск', nameEn: 'Novosibirsk', aliases: ['Нск', 'Nsk'], longitude: 82.9, utcOffsetMinutes: 420, timeZone: 'Asia/Novosibirsk' },
+      { name: '克拉斯诺亚尔斯克', nameRu: 'Красноярск', nameEn: 'Krasnoyarsk', longitude: 92.9, utcOffsetMinutes: 420, timeZone: 'Asia/Krasnoyarsk' },
+      { name: '伊尔库茨克', nameRu: 'Иркутск', nameEn: 'Irkutsk', longitude: 104.3, utcOffsetMinutes: 480, timeZone: 'Asia/Irkutsk' },
+      { name: '雅库茨克', nameRu: 'Якутск', nameEn: 'Yakutsk', longitude: 129.7, utcOffsetMinutes: 540, timeZone: 'Asia/Yakutsk' },
+      { name: '符拉迪沃斯托克', nameRu: 'Владивосток', nameEn: 'Vladivostok', aliases: ['Хайшэньвай'], longitude: 131.9, utcOffsetMinutes: 600, timeZone: 'Asia/Vladivostok' },
+      { name: '哈巴罗夫斯克', nameRu: 'Хабаровск', nameEn: 'Khabarovsk', longitude: 135.1, utcOffsetMinutes: 600, timeZone: 'Asia/Vladivostok' },
+      { name: '南萨哈林斯克', nameRu: 'Южно-Сахалинск', nameEn: 'Yuzhno-Sakhalinsk', aliases: ['Сахалин', 'Sakhalin'], longitude: 142.7, utcOffsetMinutes: 660, timeZone: 'Asia/Sakhalin' },
+      { name: '堪察加彼得罗巴甫洛夫斯克', nameRu: 'Петропавловск-Камчатский', nameEn: 'Petropavlovsk-Kamchatsky', aliases: ['Камчатка', 'Kamchatka'], longitude: 158.6, utcOffsetMinutes: 720, timeZone: 'Asia/Kamchatka' },
       // 独联体及周边
-      { name: '阿拉木图', longitude: 76.9, utcOffsetMinutes: 300, timeZone: 'Asia/Almaty' },
-      { name: '阿斯塔纳', longitude: 71.4, utcOffsetMinutes: 300, timeZone: 'Asia/Almaty' },
-      { name: '明斯克', longitude: 27.6, utcOffsetMinutes: 180, timeZone: 'Europe/Minsk' },
-      { name: '塔什干', longitude: 69.2, utcOffsetMinutes: 300, timeZone: 'Asia/Tashkent' },
-      { name: '比什凯克', longitude: 74.6, utcOffsetMinutes: 360, timeZone: 'Asia/Bishkek' },
-      { name: '第比利斯', longitude: 44.8, utcOffsetMinutes: 240, timeZone: 'Asia/Tbilisi' },
-      { name: '埃里温', longitude: 44.5, utcOffsetMinutes: 240, timeZone: 'Asia/Yerevan' },
-      { name: '巴库', longitude: 49.9, utcOffsetMinutes: 240, timeZone: 'Asia/Baku' },
-      { name: '基辅', longitude: 30.5, utcOffsetMinutes: 120, timeZone: 'Europe/Kyiv' },
+      { name: '阿拉木图', nameRu: 'Алматы', nameEn: 'Almaty', aliases: ['Алма-Ата', 'Alma-Ata'], longitude: 76.9, utcOffsetMinutes: 300, timeZone: 'Asia/Almaty' },
+      { name: '阿斯塔纳', nameRu: 'Астана', nameEn: 'Astana', aliases: ['Нур-Султан', 'Nur-Sultan', 'Целиноград'], longitude: 71.4, utcOffsetMinutes: 300, timeZone: 'Asia/Almaty' },
+      { name: '明斯克', nameRu: 'Минск', nameEn: 'Minsk', longitude: 27.6, utcOffsetMinutes: 180, timeZone: 'Europe/Minsk' },
+      { name: '塔什干', nameRu: 'Ташкент', nameEn: 'Tashkent', longitude: 69.2, utcOffsetMinutes: 300, timeZone: 'Asia/Tashkent' },
+      { name: '比什凯克', nameRu: 'Бишкек', nameEn: 'Bishkek', aliases: ['Фрунзе', 'Frunze'], longitude: 74.6, utcOffsetMinutes: 360, timeZone: 'Asia/Bishkek' },
+      { name: '第比利斯', nameRu: 'Тбилиси', nameEn: 'Tbilisi', longitude: 44.8, utcOffsetMinutes: 240, timeZone: 'Asia/Tbilisi' },
+      { name: '埃里温', nameRu: 'Ереван', nameEn: 'Yerevan', longitude: 44.5, utcOffsetMinutes: 240, timeZone: 'Asia/Yerevan' },
+      { name: '巴库', nameRu: 'Баку', nameEn: 'Baku', longitude: 49.9, utcOffsetMinutes: 240, timeZone: 'Asia/Baku' },
+      { name: '基辅', nameRu: 'Киев', nameEn: 'Kyiv', aliases: ['Kiev', 'Київ'], longitude: 30.5, utcOffsetMinutes: 120, timeZone: 'Europe/Kyiv' },
       // 亚洲 / 中东
-      { name: '东京', longitude: 139.7, utcOffsetMinutes: 540, timeZone: 'Asia/Tokyo' },
-      { name: '首尔', longitude: 127.0, utcOffsetMinutes: 540, timeZone: 'Asia/Seoul' },
-      { name: '新加坡', longitude: 103.8, utcOffsetMinutes: 480, timeZone: 'Asia/Singapore' },
-      { name: '吉隆坡', longitude: 101.7, utcOffsetMinutes: 480, timeZone: 'Asia/Kuala_Lumpur' },
-      { name: '曼谷', longitude: 100.5, utcOffsetMinutes: 420, timeZone: 'Asia/Bangkok' },
-      { name: '新德里', longitude: 77.2, utcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
-      { name: '孟买', longitude: 72.8, utcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
-      { name: '迪拜', longitude: 55.3, utcOffsetMinutes: 240, timeZone: 'Asia/Dubai' },
-      { name: '特拉维夫', longitude: 34.8, utcOffsetMinutes: 120, timeZone: 'Asia/Jerusalem' },
-      { name: '伊斯坦布尔', longitude: 29.0, utcOffsetMinutes: 180, timeZone: 'Europe/Istanbul' },
+      { name: '东京', nameRu: 'Токио', nameEn: 'Tokyo', longitude: 139.7, utcOffsetMinutes: 540, timeZone: 'Asia/Tokyo' },
+      { name: '首尔', nameRu: 'Сеул', nameEn: 'Seoul', longitude: 127.0, utcOffsetMinutes: 540, timeZone: 'Asia/Seoul' },
+      { name: '新加坡', nameRu: 'Сингапур', nameEn: 'Singapore', longitude: 103.8, utcOffsetMinutes: 480, timeZone: 'Asia/Singapore' },
+      { name: '吉隆坡', nameRu: 'Куала-Лумпур', nameEn: 'Kuala Lumpur', aliases: ['KL'], longitude: 101.7, utcOffsetMinutes: 480, timeZone: 'Asia/Kuala_Lumpur' },
+      { name: '曼谷', nameRu: 'Бангкок', nameEn: 'Bangkok', longitude: 100.5, utcOffsetMinutes: 420, timeZone: 'Asia/Bangkok' },
+      { name: '新德里', nameRu: 'Нью-Дели', nameEn: 'New Delhi', aliases: ['Дели', 'Delhi'], longitude: 77.2, utcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
+      { name: '孟买', nameRu: 'Мумбаи', nameEn: 'Mumbai', aliases: ['Бомбей', 'Bombay'], longitude: 72.8, utcOffsetMinutes: 330, timeZone: 'Asia/Kolkata' },
+      { name: '迪拜', nameRu: 'Дубай', nameEn: 'Dubai', longitude: 55.3, utcOffsetMinutes: 240, timeZone: 'Asia/Dubai' },
+      { name: '特拉维夫', nameRu: 'Тель-Авив', nameEn: 'Tel Aviv', longitude: 34.8, utcOffsetMinutes: 120, timeZone: 'Asia/Jerusalem' },
+      { name: '伊斯坦布尔', nameRu: 'Стамбул', nameEn: 'Istanbul', longitude: 29.0, utcOffsetMinutes: 180, timeZone: 'Europe/Istanbul' },
       // 欧洲
-      { name: '伦敦', longitude: -0.1, utcOffsetMinutes: 0, timeZone: 'Europe/London' },
-      { name: '巴黎', longitude: 2.3, utcOffsetMinutes: 60, timeZone: 'Europe/Paris' },
-      { name: '柏林', longitude: 13.4, utcOffsetMinutes: 60, timeZone: 'Europe/Berlin' },
-      { name: '华沙', longitude: 21.0, utcOffsetMinutes: 60, timeZone: 'Europe/Warsaw' },
-      { name: '布拉格', longitude: 14.4, utcOffsetMinutes: 60, timeZone: 'Europe/Prague' },
-      { name: '罗马', longitude: 12.5, utcOffsetMinutes: 60, timeZone: 'Europe/Rome' },
-      { name: '马德里', longitude: -3.7, utcOffsetMinutes: 60, timeZone: 'Europe/Madrid' },
+      { name: '伦敦', nameRu: 'Лондон', nameEn: 'London', longitude: -0.1, utcOffsetMinutes: 0, timeZone: 'Europe/London' },
+      { name: '巴黎', nameRu: 'Париж', nameEn: 'Paris', longitude: 2.3, utcOffsetMinutes: 60, timeZone: 'Europe/Paris' },
+      { name: '柏林', nameRu: 'Берлин', nameEn: 'Berlin', longitude: 13.4, utcOffsetMinutes: 60, timeZone: 'Europe/Berlin' },
+      { name: '华沙', nameRu: 'Варшава', nameEn: 'Warsaw', longitude: 21.0, utcOffsetMinutes: 60, timeZone: 'Europe/Warsaw' },
+      { name: '布拉格', nameRu: 'Прага', nameEn: 'Prague', aliases: ['Praha'], longitude: 14.4, utcOffsetMinutes: 60, timeZone: 'Europe/Prague' },
+      { name: '罗马', nameRu: 'Рим', nameEn: 'Rome', aliases: ['Roma'], longitude: 12.5, utcOffsetMinutes: 60, timeZone: 'Europe/Rome' },
+      { name: '马德里', nameRu: 'Мадрид', nameEn: 'Madrid', longitude: -3.7, utcOffsetMinutes: 60, timeZone: 'Europe/Madrid' },
       // 美洲
-      { name: '纽约', longitude: -74.0, utcOffsetMinutes: -300, timeZone: 'America/New_York' },
-      { name: '芝加哥', longitude: -87.6, utcOffsetMinutes: -360, timeZone: 'America/Chicago' },
-      { name: '洛杉矶', longitude: -118.2, utcOffsetMinutes: -480, timeZone: 'America/Los_Angeles' },
-      { name: '旧金山', longitude: -122.4, utcOffsetMinutes: -480, timeZone: 'America/Los_Angeles' },
-      { name: '多伦多', longitude: -79.4, utcOffsetMinutes: -300, timeZone: 'America/Toronto' },
-      { name: '温哥华', longitude: -123.1, utcOffsetMinutes: -480, timeZone: 'America/Vancouver' },
+      { name: '纽约', nameRu: 'Нью-Йорк', nameEn: 'New York', aliases: ['NYC', 'New York City', 'НЙ'], longitude: -74.0, utcOffsetMinutes: -300, timeZone: 'America/New_York' },
+      { name: '芝加哥', nameRu: 'Чикаго', nameEn: 'Chicago', longitude: -87.6, utcOffsetMinutes: -360, timeZone: 'America/Chicago' },
+      { name: '洛杉矶', nameRu: 'Лос-Анджелес', nameEn: 'Los Angeles', aliases: ['LA', 'ЛА'], longitude: -118.2, utcOffsetMinutes: -480, timeZone: 'America/Los_Angeles' },
+      { name: '旧金山', nameRu: 'Сан-Франциско', nameEn: 'San Francisco', aliases: ['SF'], longitude: -122.4, utcOffsetMinutes: -480, timeZone: 'America/Los_Angeles' },
+      { name: '多伦多', nameRu: 'Торонто', nameEn: 'Toronto', longitude: -79.4, utcOffsetMinutes: -300, timeZone: 'America/Toronto' },
+      { name: '温哥华', nameRu: 'Ванкувер', nameEn: 'Vancouver', longitude: -123.1, utcOffsetMinutes: -480, timeZone: 'America/Vancouver' },
       // 大洋洲
-      { name: '悉尼', longitude: 151.2, utcOffsetMinutes: 600, timeZone: 'Australia/Sydney' },
-      { name: '墨尔本', longitude: 145.0, utcOffsetMinutes: 600, timeZone: 'Australia/Melbourne' },
-      { name: '奥克兰', longitude: 174.8, utcOffsetMinutes: 720, timeZone: 'Pacific/Auckland' },
+      { name: '悉尼', nameRu: 'Сидней', nameEn: 'Sydney', longitude: 151.2, utcOffsetMinutes: 600, timeZone: 'Australia/Sydney' },
+      { name: '墨尔本', nameRu: 'Мельбурн', nameEn: 'Melbourne', longitude: 145.0, utcOffsetMinutes: 600, timeZone: 'Australia/Melbourne' },
+      { name: '奥克兰', nameRu: 'Окленд', nameEn: 'Auckland', longitude: 174.8, utcOffsetMinutes: 720, timeZone: 'Pacific/Auckland' },
     ],
   },
+];
+
+
+/**
+ * Дополнительные международные и российские города для многоязычного поиска
+ * (`findCityByQuery` и резервного определения часового пояса в `inferCityTimeZone`).
+ * Хранятся отдельно от `PROVINCES`, чтобы не менять инвариант состава `'海外 / 国际'`.
+ */
+const EXTRA_OVERSEAS_CITIES: readonly CityInfo[] = [
+  { name: '秋明', nameRu: 'Тюмень', nameEn: 'Tyumen', longitude: 65.53, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
+  { name: '沃罗涅日', nameRu: 'Воронеж', nameEn: 'Voronezh', longitude: 39.21, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+  { name: '萨拉托夫', nameRu: 'Саратов', nameEn: 'Saratov', longitude: 46.03, utcOffsetMinutes: 240, timeZone: 'Europe/Saratov' },
+  { name: '陶里亚蒂', nameRu: 'Тольятти', nameEn: 'Tolyatti', longitude: 49.42, utcOffsetMinutes: 240, timeZone: 'Europe/Samara' },
+  { name: '巴尔瑙尔', nameRu: 'Барнаул', nameEn: 'Barnaul', longitude: 83.76, utcOffsetMinutes: 420, timeZone: 'Asia/Barnaul' },
+  { name: '托木斯克', nameRu: 'Томск', nameEn: 'Tomsk', longitude: 84.95, utcOffsetMinutes: 420, timeZone: 'Asia/Tomsk' },
+  { name: '伊热夫斯克', nameRu: 'Ижевск', nameEn: 'Izhevsk', longitude: 53.21, utcOffsetMinutes: 240, timeZone: 'Europe/Samara' },
+  { name: '奥伦堡', nameRu: 'Оренбург', nameEn: 'Orenburg', longitude: 55.1, utcOffsetMinutes: 300, timeZone: 'Asia/Yekaterinburg' },
+  { name: '阿斯特拉罕', nameRu: 'Астрахань', nameEn: 'Astrakhan', longitude: 48.04, utcOffsetMinutes: 240, timeZone: 'Europe/Astrakhan' },
+  { name: '摩尔曼斯克', nameRu: 'Мурманск', nameEn: 'Murmansk', longitude: 33.08, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+  { name: '阿尔汉格尔斯克', nameRu: 'Архангельск', nameEn: 'Arkhangelsk', longitude: 40.54, utcOffsetMinutes: 180, timeZone: 'Europe/Moscow' },
+  { name: '马加丹', nameRu: 'Магадан', nameEn: 'Magadan', longitude: 150.8, utcOffsetMinutes: 660, timeZone: 'Asia/Magadan' },
+  { name: '杜尚别', nameRu: 'Душанбе', nameEn: 'Dushanbe', longitude: 68.78, utcOffsetMinutes: 300, timeZone: 'Asia/Dushanbe' },
+  { name: '阿什哈巴德', nameRu: 'Ашхабад', nameEn: 'Ashgabat', longitude: 58.38, utcOffsetMinutes: 300, timeZone: 'Asia/Ashgabat' },
+  { name: '基希讷乌', nameRu: 'Кишинёв', nameEn: 'Chisinau', aliases: ['Кишинев', 'Chişinău'], longitude: 28.86, utcOffsetMinutes: 120, timeZone: 'Europe/Chisinau' },
+  { name: '里加', nameRu: 'Рига', nameEn: 'Riga', longitude: 24.11, utcOffsetMinutes: 120, timeZone: 'Europe/Riga' },
+  { name: '阿姆斯特丹', nameRu: 'Амстердам', nameEn: 'Amsterdam', longitude: 4.9, utcOffsetMinutes: 60, timeZone: 'Europe/Amsterdam' },
+  { name: '维也纳', nameRu: 'Вена', nameEn: 'Vienna', aliases: ['Wien'], longitude: 16.37, utcOffsetMinutes: 60, timeZone: 'Europe/Vienna' },
 ];
 
 export function findCityInfo(provinceName: string, cityName: string): CityInfo | undefined {
@@ -792,5 +824,107 @@ export function inferCityTimeZone(longitude: number, utcOffsetMinutes: number): 
       if (Math.abs(city.longitude - longitude) < 1e-6) return city.timeZone;
     }
   }
+  for (const city of EXTRA_OVERSEAS_CITIES) {
+    if (!city.timeZone || city.utcOffsetMinutes === undefined) continue;
+    if (city.utcOffsetMinutes !== utcOffsetMinutes) continue;
+    if (Math.abs(city.longitude - longitude) < 1e-6) return city.timeZone;
+  }
+  return undefined;
+}
+
+/**
+ * Return the localized display name of a `CityInfo` entry for `'ru' | 'zh' | 'en'`.
+ */
+export function getCityDisplayName(city: CityInfo, lang: SupportedLang): string {
+  if (lang === 'zh') return city.name;
+  if (lang === 'ru') return city.nameRu ?? city.nameEn ?? city.name;
+  return city.nameEn ?? city.nameRu ?? city.name;
+}
+
+function normalizeCityQuery(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[\-–—.,'’]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripCityAdminAffixes(normalized: string): string {
+  return normalized
+    .replace(/^(?:г|город|city of)\s+/, '')
+    .replace(/(?:\s+city|市)$/, '')
+    .trim();
+}
+
+function collectCitySearchTerms(city: CityInfo, lang?: SupportedLang): string[] {
+  const ordered: Array<string | undefined> = lang === 'ru'
+    ? [city.nameRu, city.nameEn, city.name]
+    : lang === 'en'
+      ? [city.nameEn, city.nameRu, city.name]
+      : [city.name, city.nameRu, city.nameEn];
+  if (city.aliases) ordered.push(...city.aliases);
+
+  const out: string[] = [];
+  for (const item of ordered) {
+    if (typeof item === 'string' && item.trim()) {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+/**
+ * Find a city across `PROVINCES` and `EXTRA_OVERSEAS_CITIES` by localized name,
+ * Chinese name, or common alias (case-insensitive, `ё`/`е` and punctuation tolerant).
+ */
+export function findCityByQuery(
+  query: string,
+  lang?: SupportedLang,
+): { provinceName: string; city: CityInfo } | undefined {
+  if (typeof query !== 'string') return undefined;
+  const rawTrimmed = query.trim();
+  if (!rawTrimmed) return undefined;
+
+  const qNorm = normalizeCityQuery(rawTrimmed);
+  const qStripped = stripCityAdminAffixes(qNorm);
+  if (!qNorm && !qStripped) return undefined;
+
+  const candidates: Array<{ provinceName: string; city: CityInfo }> = [];
+  for (const province of PROVINCES) {
+    for (const city of province.cities) {
+      candidates.push({ provinceName: province.name, city });
+    }
+  }
+  for (const city of EXTRA_OVERSEAS_CITIES) {
+    candidates.push({ provinceName: '海外 / 国际', city });
+  }
+
+  // Pass 1: exact normalized match on canonical names/aliases
+  for (const candidate of candidates) {
+    const terms = collectCitySearchTerms(candidate.city, lang);
+    for (const term of terms) {
+      const tNorm = normalizeCityQuery(term);
+      if (tNorm === qNorm || (qStripped.length > 0 && tNorm === qStripped)) {
+        return candidate;
+      }
+    }
+  }
+
+  // Pass 2: compact whitespace-free exact match for queries >= 3 chars (e.g. "stpetersburg", "санктпетербург")
+  const qCompact = qStripped.replace(/\s+/g, '');
+  if (qCompact.length >= 3) {
+    for (const candidate of candidates) {
+      const terms = collectCitySearchTerms(candidate.city, lang);
+      for (const term of terms) {
+        const tCompact = normalizeCityQuery(term).replace(/\s+/g, '');
+        if (tCompact === qCompact) {
+          return candidate;
+        }
+      }
+    }
+  }
+
   return undefined;
 }
