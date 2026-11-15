@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import { getServerConfig } from './env';
 import type { EntitlementScope } from './access-token';
@@ -10,9 +11,24 @@ export interface StoredOrder {
   amountMinor?: number;
   currency?: string;
   provider?: string;
+  checkoutUrl?: string;
   meta?: Record<string, unknown>;
   createdAt: Date;
   paidAt?: Date;
+  updatedAt?: Date;
+}
+
+export type PaymentOrderRecord = StoredOrder;
+
+export interface CreatePendingOrderInput {
+  orderId?: string;
+  scope: EntitlementScope;
+  targetKey: string;
+  amountMinor?: number;
+  currency?: string;
+  provider?: string;
+  checkoutUrl?: string;
+  meta?: Record<string, unknown>;
 }
 
 export interface CachedInterpretation {
@@ -49,8 +65,13 @@ export interface RecordWebhookOrderInput {
   amountMinor?: number;
   currency?: string;
   provider?: string;
+  checkoutUrl?: string;
   meta?: Record<string, unknown>;
 }
+
+export type MarkOrderPaidInput = Omit<RecordWebhookOrderInput, 'eventId'> & {
+  eventId?: string;
+};
 
 export type SaveChartInterpretationInput = Omit<
   CachedInterpretation,
@@ -66,6 +87,29 @@ export type SaveSynastryInterpretationInput = Omit<
   questionHash?: string;
 };
 
+export interface DatabaseAdapter {
+  createPendingOrder(input: CreatePendingOrderInput): Promise<PaymentOrderRecord>;
+  getOrder(orderId: string): Promise<PaymentOrderRecord | null>;
+  recordWebhookOrderIfNew(
+    input: RecordWebhookOrderInput,
+  ): Promise<{ inserted: boolean; order: PaymentOrderRecord }>;
+  markOrderPaidAndGrant(
+    input: MarkOrderPaidInput,
+  ): Promise<{ inserted: boolean; order: PaymentOrderRecord }>;
+  hasPaidEntitlement(scope: EntitlementScope, targetKey: string): Promise<boolean>;
+  getChartInterpretation(
+    cacheKey: string,
+    topicKey?: string,
+  ): Promise<CachedInterpretation | null>;
+  saveChartInterpretation(entry: SaveChartInterpretationInput): Promise<void>;
+  getSynastryInterpretation(
+    pairKey: string,
+    questionHash?: string,
+  ): Promise<CachedSynastry | null>;
+  saveSynastryInterpretation(entry: SaveSynastryInterpretationInput): Promise<void>;
+  checkHealth(): Promise<{ ok: boolean; mode: 'postgres' | 'memory' }>;
+}
+
 interface OrderRow extends QueryResultRow {
   order_id: string;
   scope: string;
@@ -74,9 +118,11 @@ interface OrderRow extends QueryResultRow {
   amount_minor: number | null;
   currency: string | null;
   provider: string | null;
+  checkout_url: string | null;
   meta: unknown;
   created_at: Date | string;
   paid_at: Date | string | null;
+  updated_at: Date | string | null;
 }
 
 interface ChartInterpretationRow extends QueryResultRow {
@@ -162,9 +208,11 @@ function cloneOrder(order: StoredOrder): StoredOrder {
     ...(order.amountMinor !== undefined ? { amountMinor: order.amountMinor } : {}),
     ...(order.currency !== undefined ? { currency: order.currency } : {}),
     ...(order.provider !== undefined ? { provider: order.provider } : {}),
+    ...(order.checkoutUrl !== undefined ? { checkoutUrl: order.checkoutUrl } : {}),
     ...(order.meta !== undefined ? { meta: cloneMeta(order.meta) } : {}),
     createdAt: new Date(order.createdAt.getTime()),
     ...(order.paidAt !== undefined ? { paidAt: new Date(order.paidAt.getTime()) } : {}),
+    ...(order.updatedAt !== undefined ? { updatedAt: new Date(order.updatedAt.getTime()) } : {}),
   };
 }
 
@@ -200,9 +248,11 @@ function mapOrderRow(row: OrderRow): StoredOrder {
     ...(row.amount_minor !== null ? { amountMinor: row.amount_minor } : {}),
     ...(row.currency !== null ? { currency: row.currency } : {}),
     ...(row.provider !== null ? { provider: row.provider } : {}),
+    ...(row.checkout_url !== null ? { checkoutUrl: row.checkout_url } : {}),
     ...(meta !== undefined ? { meta } : {}),
     createdAt: toDate(row.created_at),
     ...(row.paid_at !== null ? { paidAt: toDate(row.paid_at) } : {}),
+    ...(row.updated_at !== null ? { updatedAt: toDate(row.updated_at) } : {}),
   };
 }
 
@@ -228,6 +278,51 @@ function mapSynastryRow(row: SynastryInterpretationRow): CachedSynastry {
   };
 }
 
+function generateOrderId(): string {
+  return `ord_${randomUUID().replace(/-/g, '')}`;
+}
+
+function validateCreatePendingOrderInput(input: CreatePendingOrderInput): {
+  orderId: string;
+  targetKey: string;
+} {
+  if (!isEntitlementScope(input.scope)) {
+    throw new Error(`Invalid entitlement scope: ${String(input.scope)}`);
+  }
+  const targetKey = input.targetKey.trim();
+  if (!targetKey) {
+    throw new Error('order targetKey must be non-empty');
+  }
+  if (input.orderId !== undefined && !input.orderId.trim()) {
+    throw new Error('orderId must be non-empty when provided');
+  }
+  if (
+    input.amountMinor !== undefined &&
+    (!Number.isInteger(input.amountMinor) || input.amountMinor < 0)
+  ) {
+    throw new Error('amountMinor must be a non-negative integer');
+  }
+  return {
+    orderId: input.orderId?.trim() || generateOrderId(),
+    targetKey,
+  };
+}
+
+function validateRecordWebhookInput(input: RecordWebhookOrderInput): void {
+  if (!input.eventId.trim()) {
+    throw new Error('webhook eventId must be non-empty');
+  }
+  if (!input.orderId.trim()) {
+    throw new Error('webhook orderId must be non-empty');
+  }
+  if (!input.targetKey.trim()) {
+    throw new Error('webhook targetKey must be non-empty');
+  }
+  if (!isEntitlementScope(input.scope)) {
+    throw new Error(`Invalid entitlement scope: ${String(input.scope)}`);
+  }
+}
+
 export class InMemoryDbStore {
   readonly webhookEvents = new Map<string, WebhookEventRecord>();
   readonly orders = new Map<string, StoredOrder>();
@@ -239,6 +334,46 @@ export class InMemoryDbStore {
     this.orders.clear();
     this.chartInterpretations.clear();
     this.synastryInterpretations.clear();
+  }
+
+  createPendingOrder(input: CreatePendingOrderInput): StoredOrder {
+    const { orderId, targetKey } = validateCreatePendingOrderInput(input);
+    const existing = this.orders.get(orderId);
+    if (existing) {
+      if (
+        existing.status === 'pending' &&
+        existing.scope === input.scope &&
+        existing.targetKey === targetKey
+      ) {
+        return cloneOrder(existing);
+      }
+      throw new Error(`Order already exists: ${orderId}`);
+    }
+
+    const now = new Date();
+    const order: StoredOrder = {
+      orderId,
+      scope: input.scope,
+      targetKey,
+      status: 'pending',
+      ...(input.amountMinor !== undefined ? { amountMinor: input.amountMinor } : {}),
+      ...(input.currency !== undefined ? { currency: input.currency } : {}),
+      ...(input.provider !== undefined ? { provider: input.provider } : {}),
+      ...(input.checkoutUrl !== undefined ? { checkoutUrl: input.checkoutUrl } : {}),
+      ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.orders.set(orderId, order);
+    return cloneOrder(order);
+  }
+
+  getOrder(orderId: string): StoredOrder | null {
+    const trimmed = orderId.trim();
+    if (!trimmed) return null;
+    const hit = this.orders.get(trimmed);
+    return hit ? cloneOrder(hit) : null;
   }
 
   recordWebhookOrderIfNew(
@@ -259,9 +394,11 @@ export class InMemoryDbStore {
         ...(input.amountMinor !== undefined ? { amountMinor: input.amountMinor } : {}),
         ...(input.currency !== undefined ? { currency: input.currency } : {}),
         ...(input.provider !== undefined ? { provider: input.provider } : {}),
+        ...(input.checkoutUrl !== undefined ? { checkoutUrl: input.checkoutUrl } : {}),
         ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
         createdAt: new Date(existingEvent.processedAt.getTime()),
         paidAt: new Date(existingEvent.processedAt.getTime()),
+        updatedAt: new Date(existingEvent.processedAt.getTime()),
       };
       return { inserted: false, order: fallbackOrder };
     }
@@ -278,12 +415,13 @@ export class InMemoryDbStore {
     });
 
     const previousOrder = this.orders.get(input.orderId);
+    const alreadyPaid = previousOrder?.status === 'paid';
     const mergedOrder: StoredOrder = previousOrder
       ? {
           orderId: previousOrder.orderId,
-          scope: input.scope,
-          targetKey: input.targetKey,
-          status: previousOrder.status === 'paid' ? 'paid' : nextStatus,
+          scope: alreadyPaid ? previousOrder.scope : input.scope,
+          targetKey: alreadyPaid ? previousOrder.targetKey : input.targetKey,
+          status: alreadyPaid ? 'paid' : nextStatus,
           ...(input.amountMinor !== undefined
             ? { amountMinor: input.amountMinor }
             : previousOrder.amountMinor !== undefined
@@ -299,6 +437,11 @@ export class InMemoryDbStore {
             : previousOrder.provider !== undefined
               ? { provider: previousOrder.provider }
               : {}),
+          ...(input.checkoutUrl !== undefined
+            ? { checkoutUrl: input.checkoutUrl }
+            : previousOrder.checkoutUrl !== undefined
+              ? { checkoutUrl: previousOrder.checkoutUrl }
+              : {}),
           ...(input.meta !== undefined
             ? { meta: cloneMeta(input.meta) }
             : previousOrder.meta !== undefined
@@ -310,6 +453,7 @@ export class InMemoryDbStore {
             : nextPaidAt !== undefined
               ? { paidAt: nextPaidAt }
               : {}),
+          updatedAt: now,
         }
       : {
           orderId: input.orderId,
@@ -319,9 +463,11 @@ export class InMemoryDbStore {
           ...(input.amountMinor !== undefined ? { amountMinor: input.amountMinor } : {}),
           ...(input.currency !== undefined ? { currency: input.currency } : {}),
           ...(input.provider !== undefined ? { provider: input.provider } : {}),
+          ...(input.checkoutUrl !== undefined ? { checkoutUrl: input.checkoutUrl } : {}),
           ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
           createdAt: now,
           ...(nextPaidAt !== undefined ? { paidAt: nextPaidAt } : {}),
+          updatedAt: now,
         };
 
     this.orders.set(input.orderId, mergedOrder);
@@ -385,7 +531,394 @@ export class InMemoryDbStore {
   }
 }
 
+export class MemoryDatabaseAdapter implements DatabaseAdapter {
+  private readonly store: InMemoryDbStore;
+
+  constructor(store: InMemoryDbStore = new InMemoryDbStore()) {
+    this.store = store;
+  }
+
+  async createPendingOrder(input: CreatePendingOrderInput): Promise<PaymentOrderRecord> {
+    return this.store.createPendingOrder(input);
+  }
+
+  async getOrder(orderId: string): Promise<PaymentOrderRecord | null> {
+    return this.store.getOrder(orderId);
+  }
+
+  async recordWebhookOrderIfNew(
+    input: RecordWebhookOrderInput,
+  ): Promise<{ inserted: boolean; order: PaymentOrderRecord }> {
+    validateRecordWebhookInput(input);
+    return this.store.recordWebhookOrderIfNew(input);
+  }
+
+  async markOrderPaidAndGrant(
+    input: MarkOrderPaidInput,
+  ): Promise<{ inserted: boolean; order: PaymentOrderRecord }> {
+    const eventId = input.eventId?.trim() || `order-paid:${input.orderId.trim()}`;
+    return this.recordWebhookOrderIfNew({
+      ...input,
+      eventId,
+      status: 'paid',
+    });
+  }
+
+  async hasPaidEntitlement(scope: EntitlementScope, targetKey: string): Promise<boolean> {
+    if (!targetKey || !isEntitlementScope(scope)) {
+      return false;
+    }
+    return this.store.hasPaidEntitlement(scope, targetKey);
+  }
+
+  async getChartInterpretation(
+    cacheKey: string,
+    topicKey?: string,
+  ): Promise<CachedInterpretation | null> {
+    return this.store.getChartInterpretation(cacheKey, topicKey);
+  }
+
+  async saveChartInterpretation(entry: SaveChartInterpretationInput): Promise<void> {
+    if (!entry.cacheKey.trim()) {
+      throw new Error('cacheKey must be non-empty');
+    }
+    if (typeof entry.content !== 'string') {
+      throw new Error('interpretation content must be a string');
+    }
+    this.store.saveChartInterpretation(entry);
+  }
+
+  async getSynastryInterpretation(
+    pairKey: string,
+    questionHash?: string,
+  ): Promise<CachedSynastry | null> {
+    return this.store.getSynastryInterpretation(pairKey, questionHash);
+  }
+
+  async saveSynastryInterpretation(entry: SaveSynastryInterpretationInput): Promise<void> {
+    if (!entry.pairKey.trim()) {
+      throw new Error('pairKey must be non-empty');
+    }
+    if (typeof entry.content !== 'string') {
+      throw new Error('synastry content must be a string');
+    }
+    this.store.saveSynastryInterpretation(entry);
+  }
+
+  async checkHealth(): Promise<{ ok: boolean; mode: 'postgres' | 'memory' }> {
+    return { ok: true, mode: 'memory' };
+  }
+}
+
+export class PostgresDatabaseAdapter implements DatabaseAdapter {
+  private readonly pool: Pool;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
+
+  async createPendingOrder(input: CreatePendingOrderInput): Promise<PaymentOrderRecord> {
+    const { orderId, targetKey } = validateCreatePendingOrderInput(input);
+    const serializedMeta = input.meta !== undefined ? JSON.stringify(cloneMeta(input.meta)) : null;
+
+    return withTransaction(this.pool, async (client) => {
+      const inserted = await client.query<OrderRow>(
+        `INSERT INTO orders (
+           order_id, scope, target_key, status, amount_minor,
+           currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+         )
+         VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8::jsonb, NOW(), NULL, NOW())
+         ON CONFLICT (order_id) DO NOTHING
+         RETURNING order_id, scope, target_key, status, amount_minor,
+                   currency, provider, checkout_url, meta, created_at, paid_at, updated_at`,
+        [
+          orderId,
+          input.scope,
+          targetKey,
+          input.amountMinor ?? null,
+          input.currency ?? null,
+          input.provider ?? null,
+          input.checkoutUrl ?? null,
+          serializedMeta,
+        ],
+      );
+
+      if (inserted.rows[0]) {
+        return mapOrderRow(inserted.rows[0]);
+      }
+
+      const existingRes = await client.query<OrderRow>(
+        `SELECT order_id, scope, target_key, status, amount_minor,
+                currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+         FROM orders
+         WHERE order_id = $1
+         LIMIT 1`,
+        [orderId],
+      );
+      const existing = existingRes.rows[0];
+      if (
+        existing &&
+        existing.status === 'pending' &&
+        existing.scope === input.scope &&
+        existing.target_key === targetKey
+      ) {
+        return mapOrderRow(existing);
+      }
+
+      throw new Error(`Order already exists: ${orderId}`);
+    });
+  }
+
+  async getOrder(orderId: string): Promise<PaymentOrderRecord | null> {
+    const trimmed = orderId.trim();
+    if (!trimmed) return null;
+
+    const result = await this.pool.query<OrderRow>(
+      `SELECT order_id, scope, target_key, status, amount_minor,
+              currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+       FROM orders
+       WHERE order_id = $1
+       LIMIT 1`,
+      [trimmed],
+    );
+    return result.rows[0] ? mapOrderRow(result.rows[0]) : null;
+  }
+
+  async recordWebhookOrderIfNew(
+    input: RecordWebhookOrderInput,
+  ): Promise<{ inserted: boolean; order: PaymentOrderRecord }> {
+    validateRecordWebhookInput(input);
+
+    const nextStatus = input.status?.trim() || 'paid';
+    const paidAt = nextStatus === 'paid' ? new Date() : null;
+    const serializedMeta = input.meta !== undefined ? JSON.stringify(cloneMeta(input.meta)) : null;
+
+    return withTransaction(this.pool, async (client) => {
+      const eventInsert = await client.query<{ event_id: string }>(
+        `INSERT INTO webhook_events (event_id, provider, order_id, processed_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [input.eventId, input.provider ?? null, input.orderId],
+      );
+
+      if (eventInsert.rowCount === 0) {
+        const existingOrderRes = await client.query<OrderRow>(
+          `SELECT o.order_id, o.scope, o.target_key, o.status, o.amount_minor,
+                  o.currency, o.provider, o.checkout_url, o.meta, o.created_at, o.paid_at, o.updated_at
+           FROM webhook_events w
+           JOIN orders o ON o.order_id = w.order_id
+           WHERE w.event_id = $1
+           LIMIT 1`,
+          [input.eventId],
+        );
+        if (existingOrderRes.rows[0]) {
+          return { inserted: false, order: mapOrderRow(existingOrderRes.rows[0]) };
+        }
+
+        const fallbackOrderRes = await client.query<OrderRow>(
+          `SELECT order_id, scope, target_key, status, amount_minor,
+                  currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+           FROM orders
+           WHERE order_id = $1
+           LIMIT 1`,
+          [input.orderId],
+        );
+        if (fallbackOrderRes.rows[0]) {
+          return { inserted: false, order: mapOrderRow(fallbackOrderRes.rows[0]) };
+        }
+
+        return {
+          inserted: false,
+          order: {
+            orderId: input.orderId,
+            scope: input.scope,
+            targetKey: input.targetKey,
+            status: nextStatus,
+            ...(input.amountMinor !== undefined ? { amountMinor: input.amountMinor } : {}),
+            ...(input.currency !== undefined ? { currency: input.currency } : {}),
+            ...(input.provider !== undefined ? { provider: input.provider } : {}),
+            ...(input.checkoutUrl !== undefined ? { checkoutUrl: input.checkoutUrl } : {}),
+            ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
+            createdAt: new Date(),
+            ...(paidAt ? { paidAt } : {}),
+          },
+        };
+      }
+
+      const orderUpsert = await client.query<OrderRow>(
+        `INSERT INTO orders (
+           order_id, scope, target_key, status, amount_minor,
+           currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), $10, NOW())
+         ON CONFLICT (order_id) DO UPDATE SET
+           scope = CASE WHEN orders.status = 'paid' THEN orders.scope ELSE EXCLUDED.scope END,
+           target_key = CASE WHEN orders.status = 'paid' THEN orders.target_key ELSE EXCLUDED.target_key END,
+           status = CASE WHEN orders.status = 'paid' THEN 'paid' ELSE EXCLUDED.status END,
+           amount_minor = COALESCE(EXCLUDED.amount_minor, orders.amount_minor),
+           currency = COALESCE(EXCLUDED.currency, orders.currency),
+           provider = COALESCE(EXCLUDED.provider, orders.provider),
+           checkout_url = COALESCE(EXCLUDED.checkout_url, orders.checkout_url),
+           meta = COALESCE(EXCLUDED.meta, orders.meta),
+           paid_at = COALESCE(orders.paid_at, EXCLUDED.paid_at),
+           updated_at = NOW()
+         RETURNING order_id, scope, target_key, status, amount_minor,
+                   currency, provider, checkout_url, meta, created_at, paid_at, updated_at`,
+        [
+          input.orderId,
+          input.scope,
+          input.targetKey,
+          nextStatus,
+          input.amountMinor ?? null,
+          input.currency ?? null,
+          input.provider ?? null,
+          input.checkoutUrl ?? null,
+          serializedMeta,
+          paidAt,
+        ],
+      );
+
+      return {
+        inserted: true,
+        order: mapOrderRow(orderUpsert.rows[0]),
+      };
+    });
+  }
+
+  async markOrderPaidAndGrant(
+    input: MarkOrderPaidInput,
+  ): Promise<{ inserted: boolean; order: PaymentOrderRecord }> {
+    const eventId = input.eventId?.trim() || `order-paid:${input.orderId.trim()}`;
+    return this.recordWebhookOrderIfNew({
+      ...input,
+      eventId,
+      status: 'paid',
+    });
+  }
+
+  async hasPaidEntitlement(scope: EntitlementScope, targetKey: string): Promise<boolean> {
+    if (!targetKey || !isEntitlementScope(scope)) {
+      return false;
+    }
+
+    const scopes = [...matchingScopesFor(scope)];
+    const result = await this.pool.query<{ ok: number }>(
+      `SELECT 1 AS ok
+       FROM orders
+       WHERE scope = ANY($1::text[])
+         AND target_key = $2
+         AND status = 'paid'
+       LIMIT 1`,
+      [scopes, targetKey],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async getChartInterpretation(
+    cacheKey: string,
+    topicKey?: string,
+  ): Promise<CachedInterpretation | null> {
+    if (!cacheKey) return null;
+
+    const resolvedTopic = normalizeTopicKey(topicKey);
+    const result = await this.pool.query<ChartInterpretationRow>(
+      `SELECT cache_key, topic_key, content, provider, model, created_at
+       FROM chart_interpretations
+       WHERE cache_key = $1 AND topic_key = $2
+       LIMIT 1`,
+      [cacheKey, resolvedTopic],
+    );
+    return result.rows[0] ? mapChartRow(result.rows[0]) : null;
+  }
+
+  async saveChartInterpretation(entry: SaveChartInterpretationInput): Promise<void> {
+    if (!entry.cacheKey.trim()) {
+      throw new Error('cacheKey must be non-empty');
+    }
+    if (typeof entry.content !== 'string') {
+      throw new Error('interpretation content must be a string');
+    }
+
+    const resolvedTopic = normalizeTopicKey(entry.topicKey);
+    await this.pool.query(
+      `INSERT INTO chart_interpretations (
+         cache_key, topic_key, content, provider, model, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (cache_key, topic_key) DO UPDATE SET
+         content = EXCLUDED.content,
+         provider = EXCLUDED.provider,
+         model = EXCLUDED.model,
+         created_at = NOW()`,
+      [
+        entry.cacheKey,
+        resolvedTopic,
+        entry.content,
+        entry.provider ?? null,
+        entry.model ?? null,
+      ],
+    );
+  }
+
+  async getSynastryInterpretation(
+    pairKey: string,
+    questionHash?: string,
+  ): Promise<CachedSynastry | null> {
+    if (!pairKey) return null;
+
+    const resolvedHash = normalizeQuestionHash(questionHash);
+    const result = await this.pool.query<SynastryInterpretationRow>(
+      `SELECT pair_key, question_hash, content, provider, model, created_at
+       FROM synastry_interpretations
+       WHERE pair_key = $1 AND question_hash = $2
+       LIMIT 1`,
+      [pairKey, resolvedHash],
+    );
+    return result.rows[0] ? mapSynastryRow(result.rows[0]) : null;
+  }
+
+  async saveSynastryInterpretation(entry: SaveSynastryInterpretationInput): Promise<void> {
+    if (!entry.pairKey.trim()) {
+      throw new Error('pairKey must be non-empty');
+    }
+    if (typeof entry.content !== 'string') {
+      throw new Error('synastry content must be a string');
+    }
+
+    const resolvedHash = normalizeQuestionHash(entry.questionHash);
+    await this.pool.query(
+      `INSERT INTO synastry_interpretations (
+         pair_key, question_hash, content, provider, model, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (pair_key, question_hash) DO UPDATE SET
+         content = EXCLUDED.content,
+         provider = EXCLUDED.provider,
+         model = EXCLUDED.model,
+         created_at = NOW()`,
+      [
+        entry.pairKey,
+        resolvedHash,
+        entry.content,
+        entry.provider ?? null,
+        entry.model ?? null,
+      ],
+    );
+  }
+
+  async checkHealth(): Promise<{ ok: boolean; mode: 'postgres' | 'memory' }> {
+    try {
+      await this.pool.query('SELECT 1');
+      return { ok: true, mode: 'postgres' };
+    } catch {
+      return { ok: false, mode: 'postgres' };
+    }
+  }
+}
+
 const memoryDb = new InMemoryDbStore();
+const memoryAdapter = new MemoryDatabaseAdapter(memoryDb);
 let poolSingleton: Pool | null = null;
 let poolDatabaseUrl: string | undefined;
 
@@ -438,19 +971,9 @@ export async function closeDbPoolForTests(): Promise<void> {
   }
 }
 
-function validateRecordWebhookInput(input: RecordWebhookOrderInput): void {
-  if (!input.eventId.trim()) {
-    throw new Error('webhook eventId must be non-empty');
-  }
-  if (!input.orderId.trim()) {
-    throw new Error('webhook orderId must be non-empty');
-  }
-  if (!input.targetKey.trim()) {
-    throw new Error('webhook targetKey must be non-empty');
-  }
-  if (!isEntitlementScope(input.scope)) {
-    throw new Error(`Invalid entitlement scope: ${String(input.scope)}`);
-  }
+export function getDatabaseAdapter(): DatabaseAdapter {
+  const pool = getDbPool();
+  return pool ? new PostgresDatabaseAdapter(pool) : memoryAdapter;
 }
 
 async function withTransaction<T>(
@@ -471,265 +994,64 @@ async function withTransaction<T>(
   }
 }
 
+export async function createPendingOrder(
+  input: CreatePendingOrderInput,
+): Promise<PaymentOrderRecord> {
+  return getDatabaseAdapter().createPendingOrder(input);
+}
+
+export async function getOrder(orderId: string): Promise<PaymentOrderRecord | null> {
+  return getDatabaseAdapter().getOrder(orderId);
+}
+
 export async function recordWebhookOrderIfNew(
   input: RecordWebhookOrderInput,
-): Promise<{ inserted: boolean; order: StoredOrder }> {
-  validateRecordWebhookInput(input);
+): Promise<{ inserted: boolean; order: PaymentOrderRecord }> {
+  return getDatabaseAdapter().recordWebhookOrderIfNew(input);
+}
 
-  const pool = getDbPool();
-  if (!pool) {
-    return memoryDb.recordWebhookOrderIfNew(input);
-  }
-
-  const nextStatus = input.status?.trim() || 'paid';
-  const paidAt = nextStatus === 'paid' ? new Date() : null;
-  const serializedMeta = input.meta !== undefined ? JSON.stringify(cloneMeta(input.meta)) : null;
-
-  return withTransaction(pool, async (client) => {
-    const eventInsert = await client.query<{ event_id: string }>(
-      `INSERT INTO webhook_events (event_id, provider, order_id, processed_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (event_id) DO NOTHING
-       RETURNING event_id`,
-      [input.eventId, input.provider ?? null, input.orderId],
-    );
-
-    if (eventInsert.rowCount === 0) {
-      const existingOrderRes = await client.query<OrderRow>(
-        `SELECT o.order_id, o.scope, o.target_key, o.status, o.amount_minor,
-                o.currency, o.provider, o.meta, o.created_at, o.paid_at
-         FROM webhook_events w
-         JOIN orders o ON o.order_id = w.order_id
-         WHERE w.event_id = $1
-         LIMIT 1`,
-        [input.eventId],
-      );
-      if (existingOrderRes.rows[0]) {
-        return { inserted: false, order: mapOrderRow(existingOrderRes.rows[0]) };
-      }
-
-      const fallbackOrderRes = await client.query<OrderRow>(
-        `SELECT order_id, scope, target_key, status, amount_minor,
-                currency, provider, meta, created_at, paid_at
-         FROM orders
-         WHERE order_id = $1
-         LIMIT 1`,
-        [input.orderId],
-      );
-      if (fallbackOrderRes.rows[0]) {
-        return { inserted: false, order: mapOrderRow(fallbackOrderRes.rows[0]) };
-      }
-
-      return {
-        inserted: false,
-        order: {
-          orderId: input.orderId,
-          scope: input.scope,
-          targetKey: input.targetKey,
-          status: nextStatus,
-          ...(input.amountMinor !== undefined ? { amountMinor: input.amountMinor } : {}),
-          ...(input.currency !== undefined ? { currency: input.currency } : {}),
-          ...(input.provider !== undefined ? { provider: input.provider } : {}),
-          ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
-          createdAt: new Date(),
-          ...(paidAt ? { paidAt } : {}),
-        },
-      };
-    }
-
-    const orderUpsert = await client.query<OrderRow>(
-      `INSERT INTO orders (
-         order_id, scope, target_key, status, amount_minor,
-         currency, provider, meta, created_at, paid_at
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), $9)
-       ON CONFLICT (order_id) DO UPDATE SET
-         scope = EXCLUDED.scope,
-         target_key = EXCLUDED.target_key,
-         status = CASE WHEN orders.status = 'paid' THEN 'paid' ELSE EXCLUDED.status END,
-         amount_minor = COALESCE(EXCLUDED.amount_minor, orders.amount_minor),
-         currency = COALESCE(EXCLUDED.currency, orders.currency),
-         provider = COALESCE(EXCLUDED.provider, orders.provider),
-         meta = COALESCE(EXCLUDED.meta, orders.meta),
-         paid_at = COALESCE(orders.paid_at, EXCLUDED.paid_at)
-       RETURNING order_id, scope, target_key, status, amount_minor,
-                 currency, provider, meta, created_at, paid_at`,
-      [
-        input.orderId,
-        input.scope,
-        input.targetKey,
-        nextStatus,
-        input.amountMinor ?? null,
-        input.currency ?? null,
-        input.provider ?? null,
-        serializedMeta,
-        paidAt,
-      ],
-    );
-
-    return {
-      inserted: true,
-      order: mapOrderRow(orderUpsert.rows[0]),
-    };
-  });
+export async function markOrderPaidAndGrant(
+  input: MarkOrderPaidInput,
+): Promise<{ inserted: boolean; order: PaymentOrderRecord }> {
+  return getDatabaseAdapter().markOrderPaidAndGrant(input);
 }
 
 export async function hasPaidEntitlement(
   scope: EntitlementScope,
   targetKey: string,
 ): Promise<boolean> {
-  if (!targetKey || !isEntitlementScope(scope)) {
-    return false;
-  }
-
-  const pool = getDbPool();
-  if (!pool) {
-    return memoryDb.hasPaidEntitlement(scope, targetKey);
-  }
-
-  const scopes = [...matchingScopesFor(scope)];
-  const result = await pool.query<{ ok: number }>(
-    `SELECT 1 AS ok
-     FROM orders
-     WHERE scope = ANY($1::text[])
-       AND target_key = $2
-       AND status = 'paid'
-     LIMIT 1`,
-    [scopes, targetKey],
-  );
-  return (result.rowCount ?? 0) > 0;
+  return getDatabaseAdapter().hasPaidEntitlement(scope, targetKey);
 }
 
 export async function getChartInterpretation(
   cacheKey: string,
   topicKey?: string,
 ): Promise<CachedInterpretation | null> {
-  if (!cacheKey) return null;
-
-  const pool = getDbPool();
-  if (!pool) {
-    return memoryDb.getChartInterpretation(cacheKey, topicKey);
-  }
-
-  const resolvedTopic = normalizeTopicKey(topicKey);
-  const result = await pool.query<ChartInterpretationRow>(
-    `SELECT cache_key, topic_key, content, provider, model, created_at
-     FROM chart_interpretations
-     WHERE cache_key = $1 AND topic_key = $2
-     LIMIT 1`,
-    [cacheKey, resolvedTopic],
-  );
-  return result.rows[0] ? mapChartRow(result.rows[0]) : null;
+  return getDatabaseAdapter().getChartInterpretation(cacheKey, topicKey);
 }
 
 export async function saveChartInterpretation(
   entry: SaveChartInterpretationInput,
 ): Promise<void> {
-  if (!entry.cacheKey.trim()) {
-    throw new Error('cacheKey must be non-empty');
-  }
-  if (typeof entry.content !== 'string') {
-    throw new Error('interpretation content must be a string');
-  }
-
-  const pool = getDbPool();
-  if (!pool) {
-    memoryDb.saveChartInterpretation(entry);
-    return;
-  }
-
-  const resolvedTopic = normalizeTopicKey(entry.topicKey);
-  await pool.query(
-    `INSERT INTO chart_interpretations (
-       cache_key, topic_key, content, provider, model, created_at
-     )
-     VALUES ($1, $2, $3, $4, $5, NOW())
-     ON CONFLICT (cache_key, topic_key) DO UPDATE SET
-       content = EXCLUDED.content,
-       provider = EXCLUDED.provider,
-       model = EXCLUDED.model,
-       created_at = NOW()`,
-    [
-      entry.cacheKey,
-      resolvedTopic,
-      entry.content,
-      entry.provider ?? null,
-      entry.model ?? null,
-    ],
-  );
+  return getDatabaseAdapter().saveChartInterpretation(entry);
 }
 
 export async function getSynastryInterpretation(
   pairKey: string,
   questionHash?: string,
 ): Promise<CachedSynastry | null> {
-  if (!pairKey) return null;
-
-  const pool = getDbPool();
-  if (!pool) {
-    return memoryDb.getSynastryInterpretation(pairKey, questionHash);
-  }
-
-  const resolvedHash = normalizeQuestionHash(questionHash);
-  const result = await pool.query<SynastryInterpretationRow>(
-    `SELECT pair_key, question_hash, content, provider, model, created_at
-     FROM synastry_interpretations
-     WHERE pair_key = $1 AND question_hash = $2
-     LIMIT 1`,
-    [pairKey, resolvedHash],
-  );
-  return result.rows[0] ? mapSynastryRow(result.rows[0]) : null;
+  return getDatabaseAdapter().getSynastryInterpretation(pairKey, questionHash);
 }
 
 export async function saveSynastryInterpretation(
   entry: SaveSynastryInterpretationInput,
 ): Promise<void> {
-  if (!entry.pairKey.trim()) {
-    throw new Error('pairKey must be non-empty');
-  }
-  if (typeof entry.content !== 'string') {
-    throw new Error('synastry content must be a string');
-  }
-
-  const pool = getDbPool();
-  if (!pool) {
-    memoryDb.saveSynastryInterpretation(entry);
-    return;
-  }
-
-  const resolvedHash = normalizeQuestionHash(entry.questionHash);
-  await pool.query(
-    `INSERT INTO synastry_interpretations (
-       pair_key, question_hash, content, provider, model, created_at
-     )
-     VALUES ($1, $2, $3, $4, $5, NOW())
-     ON CONFLICT (pair_key, question_hash) DO UPDATE SET
-       content = EXCLUDED.content,
-       provider = EXCLUDED.provider,
-       model = EXCLUDED.model,
-       created_at = NOW()`,
-    [
-      entry.pairKey,
-      resolvedHash,
-      entry.content,
-      entry.provider ?? null,
-      entry.model ?? null,
-    ],
-  );
+  return getDatabaseAdapter().saveSynastryInterpretation(entry);
 }
 
 export async function checkDbHealth(): Promise<{
   ok: boolean;
   mode: 'postgres' | 'memory';
 }> {
-  const pool = getDbPool();
-  if (!pool) {
-    return { ok: true, mode: 'memory' };
-  }
-  try {
-    await pool.query('SELECT 1');
-    return { ok: true, mode: 'postgres' };
-  } catch {
-    return { ok: false, mode: 'postgres' };
-  }
+  return getDatabaseAdapter().checkHealth();
 }

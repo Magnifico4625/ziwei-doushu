@@ -45,22 +45,25 @@ This repo is an open snapshot of the engine behind [metisziwei.com](https://meti
 
 | Feature | Notes |
 |---|---|
-| True solar time | Longitude offset plus the equation of time, with 58 international hubs in `cities.ts` (covering all 11 Russian standard time zones plus `Europe/Volgograd`, CIS, and major global cities) with historical IANA time zones (DST-aware) and manual UTC offsets (`UTC-12` to `UTC+14`, including `UTC+5:30`). A transition uses Temporal `compatible`: a nonexistent local time takes the offset after the transition; a repeated local time takes the earlier offset |
+| True solar time | Longitude offset plus the equation of time, with 58 international hubs in `cities.ts` (covering all 11 Russian standard time zones plus `Europe/Volgograd`, CIS, and major global cities) plus 18 additional RU/CIS/European hubs in `EXTRA_OVERSEAS_CITIES`, multilingual search (`findCityByQuery` / `getCityDisplayName` with `nameRu`, `nameEn`, `aliases`), historical IANA time zones (DST-aware), and manual UTC offsets (`UTC-12` to `UTC+14`, including `UTC+5:30`). A transition uses Temporal `compatible`: a nonexistent local time takes the offset after the transition; a repeated local time takes the earlier offset |
 | China DST | The commonly used convention table in `dst-cn.ts` (not IANA) drives a birth-form warning and a one-click −1 hour control. The engine does not change the entered time. See the note below for how the table differs from IANA |
 | Leap months | Four configurable conventions (previous month / next month / split by day / same month) |
 | Late Zi hour | Determined by true solar time when a location/timezone is set (23:00–23:59 charts on the next day; 00:00–00:59 is early Zi on that solar day), or by clock hour when no location is given; switchable |
 | Star brightness | 7 levels (庙 旺 得 利 平 不 陷); brightness tables of different schools are switchable, not hard-coded |
 | Four Transformations | Natal, decade (大限) and annual (流年) transformations, plus flying-star self-transformations |
 | Twelve spirits | Natal layer by year branch, annual layer by the annual branch |
-| Patterns | 1,100+ lines of pattern rules (紫府同宫, 日月并明, 七杀朝斗, …) |
+| Patterns | 1,100+ lines of pattern rules (紫府同宫, 日月并明, 七杀朝斗, …), free of `server-only` for direct Node/`tsx` execution |
+| Multilingual i18n | `i18n.ts` (`SupportedLang = 'ru' \| 'zh' \| 'en'`, `normalizeLang`, `translateChartSummary`): complete dictionaries for 12 palaces, all stars, SiHua, brightness, 5-element bureaus, stems/branches, 44+ classical patterns, and chart summaries |
+| Zero-LLM Free Tier & teasers | `db-analysis.ts` (`generateFreeLifePalaceReading` covering all 14 major stars, 24 dual-star pairs, empty-palace opposite borrowing, brightness & natal SiHua in `ru`/`zh`/`en`) and `paywall-teasers.ts` (`generateChartTeasers`, `generateSynastryTeasers`) |
 | Deterministic synastry | `heming.ts` (`analyzeSynastry`, `buildSynastryPromptPayload`): zero-LLM cross-chart Flying SiHua (`yearStem` + optional `mingStem`/`fuqiStem`), Life/Spouse palace & borrowed-star resonance, branch relations, optional annual overlay, 0–100 scoring, and `< 3 KB` compact LLM prompt payloads |
 | Deterministic chart analyzer | `chart-analyzer.ts` (`getChartCacheKey`, `extractChartPainPoints`, `buildChartPromptPayload`): zero-LLM canonical chart cache keys, Natal/Self/DaXian/LiuNian HuaJi & Sha-cluster pain-point extraction, Life/Body/SanFangSiZheng summaries, and `< 3 KB` compact LLM payloads |
+| Commercial license hygiene | Runtime modules (`lib/ziwei/*`, `lib/server/*`, `app/api/*`) contain zero `CC BY-NC-SA 4.0` text or `ni_quote` lecture quotes |
 
 On an IANA transition there is one rule, independent of hemisphere and of the sign of longitude, matching Temporal `disambiguation: 'compatible'`. A nonexistent local time (the spring-forward gap) uses the offset after the transition. A repeated local time (the fall-back overlap) uses the earlier offset, the one from before the transition. Examples: New York 2024-03-10 02:30 (nonexistent) → UTC−4; London 2024-03-31 01:30 → UTC+1; Moscow 2011-03-27 02:30 → UTC+4; Sydney 2024-10-06 02:30 → UTC+11; New York 2024-11-03 01:30 (repeated) → the earlier UTC−4; London 2024-10-27 01:30 → UTC+1; Moscow 2014-10-26 01:30 → UTC+4; Sydney 2024-04-07 02:30 → UTC+11. The form names the offset it used and does not block the chart.
 
 The China DST table is the commonly used national table. IANA `Asia/Shanghai` also has 1919; 1935–1939, 1950–1961, 1974, 1975 and 1979 are in the table and absent from IANA; the 1940s differ; 1988 starts on 10 April in the table and 17 April in IANA. The warning follows the table.
 
-Engine code lives in `lib/ziwei/` (entry point: `generateChart()` in `algorithm.ts`) and is decoupled from UI components (`BirthFormState` lives in `lib/ziwei/types.ts`, with zero `@/components/*` imports in `lib/ziwei/`). Core charting, geo, synastry (`heming.ts`), and chart analysis (`chart-analyzer.ts`) modules run headlessly in both Next.js and Node/`tsx`. Inputs are a **Gregorian** date and an **hour branch index 0–11** (子 = 0 … 亥 = 11), not a clock hour.
+Engine code lives in `lib/ziwei/` (entry point: `generateChart()` in `algorithm.ts`) and is decoupled from UI components (`BirthFormState` lives in `lib/ziwei/types.ts`, with zero `@/components/*` imports in `lib/ziwei/`). `patterns.ts` and `famous.ts` no longer import `server-only`, so core charting, patterns, geo, `i18n.ts`, `db-analysis.ts`, `paywall-teasers.ts`, synastry (`heming.ts`), and chart analysis (`chart-analyzer.ts`) modules run headlessly in both Next.js and Node/`tsx` with zero `CC BY-NC-SA 4.0` runtime text. Inputs are a **Gregorian** date and an **hour branch index 0–11** (子 = 0 … 亥 = 11), not a clock hour.
 
 ## Quick start
 
@@ -71,19 +74,24 @@ npm ci
 npm run dev          # charting demo at http://localhost:3000/chart
 
 npm run typecheck    # TypeScript check
-npm test             # 18 regression suites (charting, DST, geo/cities, synastry, chart-analyzer, server-infra, api-routes)
+npm test             # 20 regression suites (charting, DST, geo/cities, synastry, chart-analyzer, server-infra, api-routes, i18n/teasers/license, stage3-commercial)
+npm run test:i18n-teasers-license
+npm run test:stage3-commercial
 ```
 
-**No API key or database is needed for charting.** Backend API routes (`app/api/`) and server infrastructure (`lib/server/`, `db/schema.sql`) are now included:
+**No API key or database is needed for charting.** Backend API routes (`app/api/`) and server infrastructure (`lib/server/`, `db/schema.sql`) are now included, with `'ru' | 'zh' | 'en'` localization and `ALLOWED_ORIGINS` CORS (`lib/server/cors.ts`, exporting `OPTIONS` and wrapping responses with `withCors` across all 7 `/api/*` routes):
 
 - `GET /api/health` — checks PostgreSQL & Redis health (auto-falling back to in-memory mode when `DATABASE_URL` / `REDIS_URL` are unset) and exposes non-secret `aiProvider` / `paywallMode`.
-- `POST /api/chart` — **Zero-LLM ($0 AI cost)** charting & pre-paywall analysis endpoint (natal & synastry preview, pain-point extraction, pattern detection, and cache lookup; never imports `llm.ts`).
-- `POST /api/billing/webhook` — verifies HMAC-SHA256 signatures (`timingSafeEqual`), persists `webhook_events` / `orders` idempotently, and signs HMAC `accessToken`s for `paid` events.
-- `POST /api/interpret` & `POST /api/heming` — enforce strict paywall gating by default (`AI_PAYWALL_MODE=strict`, returning `402 PAYWALL_LOCKED` before checking paid cache or calling any LLM), apply IP rate limiting, cache responses in Redis + PostgreSQL (with in-memory fallback), and stream SSE across `deepseek`, `anthropic`, `mimo`, and `openai-compatible` providers. Copy `.env.example` to `.env.local` and set `AI_PAYWALL_MODE=off` plus a provider key for local non-billed AI testing.
+- `POST /api/chart` — **Zero-LLM ($0 AI cost)** charting & pre-paywall analysis endpoint supporting `lang: 'ru' | 'zh' | 'en'`, multilingual city lookup via `findCityByQuery` (e.g., `"Москва"`), direct synchronous `detectPatterns(chart)`, deterministic `freeLifePalace` (`命宫` free reading), localized `teasers`, `localizedSummary`/`localizedPatterns`, and cache lookup (never imports `llm.ts`).
+- **Full billing lifecycle** (`/api/billing/*`, configured via `APP_PUBLIC_URL`, `BILLING_PROVIDER`, `BILLING_CHECKOUT_BASE_URL`):
+  - `POST /api/billing/checkout` — validates `scope` (`'interpret' | 'heming' | 'bundle'`) and `targetKey` (`chartKey`/`pairKey`), persists a `'pending'` order, and returns `201` with `orderId` and `checkoutUrl`.
+  - `GET /api/billing/order?orderId=...` — polls order status; returns `paid: false` (never exposing `accessToken`) while pending, and signs & returns an HS256 `accessToken` once `paid`.
+  - `POST /api/billing/webhook` — verifies HMAC-SHA256 signatures (`timingSafeEqual`), atomically marks `'pending'` orders `'paid'` (or records new `webhook_events`/`orders` idempotently), and issues signed `accessToken`s.
+- `POST /api/interpret` & `POST /api/heming` — support `lang: 'ru' | 'zh' | 'en'` with localized LLM system prompts (`lib/server/llm.ts`) and language-isolated Redis + PostgreSQL caches (`scopedTopicKey` / `scopedQuestionHash` in `lib/server/cache.ts`), while keeping `chartKey` / `pairKey` paywall entitlements language-agnostic across UI language switches. Enforce strict paywall gating by default (`AI_PAYWALL_MODE=strict`, returning `402 PAYWALL_LOCKED` before checking paid cache or calling any LLM), apply IP rate limiting, and stream SSE across `deepseek`, `anthropic`, `mimo`, and `openai-compatible` providers; `POST /api/heming` with `previewOnly: true` returns Zero-LLM localized `overview` and `teasers`. Copy `.env.example` to `.env.local` and set `AI_PAYWALL_MODE=off` plus a provider key for local non-billed AI testing.
 
 ## What is not included
 
-The proprietary 13-topic interpretation database (`lib/ziwei/db-analysis.ts` is a placeholder), production commercial prompts and full commercial frontend UI, payment-gateway merchant integrations/user accounts, and production deployment secrets.
+The proprietary 13-topic interpretation database (`STAR_DB` in `lib/ziwei/db-analysis.ts` remains empty, while deterministic Zero-LLM `命宫` free readings via `generateFreeLifePalaceReading` and `paywall-teasers.ts` are included), production commercial frontend UI, merchant payment-gateway credentials/user accounts, and production deployment secrets.
 
 ## Interpretation dataset v4.0 (674,976 charts × 13 topics, 2026-10-15)
 
@@ -122,7 +130,7 @@ Lunar dates are a separate calendar. A lunar month may have 30 days, and leap lu
 
 | Part | License |
 |---|---|
-| Code (`lib/`, `app/`, `components/`, `db/`) | [MIT](./LICENSE) |
+| Code (`lib/`, `app/`, `components/`, `db/` — zero `CC BY-NC-SA 4.0` runtime text; `server-only` removed from `patterns.ts` & `famous.ts`) | [MIT](./LICENSE) |
 | Sample dataset (Releases) | [CC BY 4.0](./DATASET-LICENSE): commercial use OK with attribution |
 | Classical texts | Public domain |
 | Ni Haixia quotes (`docs/tianji-ziwei/`) | [CC BY-NC-SA 4.0](./docs/tianji-ziwei/LICENSE.md): **non-commercial only** |

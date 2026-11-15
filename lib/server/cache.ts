@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import Redis from 'ioredis';
 import { getChartCacheKey } from '../ziwei/chart-analyzer';
+import { normalizeLang, type SupportedLang } from '../ziwei/i18n';
 import type { ZiweiChart } from '../ziwei/types';
 import { getServerConfig } from './env';
 
@@ -145,11 +146,45 @@ export function hashQuestion(question?: string): string {
   return sha256Hex(normalized, 24);
 }
 
+/**
+ * Scope a chart interpretation topic key by UI language while leaving `'zh'`
+ * (and omitted `lang`) unprefixed for backwards compatibility with existing
+ * entitlements and cached Chinese records.
+ */
+export function scopedTopicKey(
+  topicKey?: string,
+  lang?: SupportedLang,
+): string {
+  const base = topicKey?.trim() || 'default';
+  if (lang === undefined) {
+    return base;
+  }
+  const resolved = normalizeLang(lang, 'zh');
+  return resolved === 'zh' ? base : `${resolved}:${base}`;
+}
+
+/**
+ * Scope a synastry question hash by UI language while leaving `'zh'`
+ * (and omitted `lang`) unprefixed for backwards compatibility.
+ */
+export function scopedQuestionHash(
+  questionHash?: string,
+  lang?: SupportedLang,
+): string {
+  const base = questionHash?.trim() || 'default';
+  if (lang === undefined) {
+    return base;
+  }
+  const resolved = normalizeLang(lang, 'zh');
+  return resolved === 'zh' ? base : `${resolved}:${base}`;
+}
+
 export function buildInterpretRedisKey(
   chartKey: string,
   messagesHash: string,
+  lang?: SupportedLang,
 ): string {
-  const hashPart = messagesHash.trim() || 'default';
+  const hashPart = scopedTopicKey(messagesHash, lang);
   return `ziwei:cache:interpret:${chartKey}:${hashPart}`;
 }
 
@@ -177,8 +212,9 @@ export function canonicalPairKey(
 export function buildSynastryRedisKey(
   pairKey: string,
   questionHash: string,
+  lang?: SupportedLang,
 ): string {
-  const hashPart = questionHash.trim() || 'default';
+  const hashPart = scopedQuestionHash(questionHash, lang);
   return `ziwei:cache:synastry:${pairKey}:${hashPart}`;
 }
 

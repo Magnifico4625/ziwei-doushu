@@ -1,4 +1,5 @@
 import { getServerConfig, type ServerConfig } from '@/lib/server/env';
+import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { extractBearerToken, verifyAccessToken } from '@/lib/server/access-token';
 import {
   checkRateLimit,
@@ -15,6 +16,7 @@ import {
   getCachedStreamText,
   getRedisClient,
   hashPromptMessages,
+  scopedTopicKey,
   setCachedStreamText,
 } from '@/lib/server/cache';
 import {
@@ -26,11 +28,10 @@ import {
   streamLlmSse,
   type ChatMessage,
 } from '@/lib/server/llm';
-import {
-  getChartCacheKey,
-  type PatternSummary,
-} from '@/lib/ziwei/chart-analyzer';
+import { getChartCacheKey } from '@/lib/ziwei/chart-analyzer';
 import { isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
+import { normalizeLang, type SupportedLang } from '@/lib/ziwei/i18n';
+import { detectPatterns } from '@/lib/ziwei/patterns';
 import type { ZiweiChart } from '@/lib/ziwei/types';
 
 export const runtime = 'nodejs';
@@ -43,19 +44,23 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function jsonError(
+  req: Request,
   status: number,
   error: string,
   code: string,
   message?: string,
   headers?: HeadersInit,
 ): Response {
-  return Response.json(
-    {
-      error,
-      code,
-      ...(message ? { message } : {}),
-    },
-    { status, headers },
+  return withCors(
+    req,
+    Response.json(
+      {
+        error,
+        code,
+        ...(message ? { message } : {}),
+      },
+      { status, headers },
+    ),
   );
 }
 
@@ -78,15 +83,6 @@ function getRateLimitRedis(): RateLimitRedisClient | null {
   };
 }
 
-async function detectPatternsSafe(chart: ZiweiChart): Promise<PatternSummary[]> {
-  try {
-    const m = await import('@/lib/ziwei/patterns');
-    return m.detectPatterns(chart);
-  } catch {
-    return [];
-  }
-}
-
 function resolveModelName(cfg: ServerConfig): string | undefined {
   switch (cfg.aiProvider) {
     case 'anthropic':
@@ -98,6 +94,16 @@ function resolveModelName(cfg: ServerConfig): string | undefined {
     case 'openai-compatible':
       return cfg.openaiModel;
   }
+}
+
+function parseLang(raw: unknown): ParseResult<SupportedLang> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: 'zh' };
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false, message: "lang must be 'ru', 'zh', or 'en'" };
+  }
+  return { ok: true, value: normalizeLang(raw, 'zh') };
 }
 
 function parseChart(raw: unknown): ParseResult<ZiweiChart> {
@@ -209,6 +215,10 @@ function parseTargetYear(raw: unknown): ParseResult<number | undefined> {
   return { ok: true, value: raw };
 }
 
+export async function OPTIONS(req: Request): Promise<Response> {
+  return handleCorsPreflight(req);
+}
+
 export async function POST(req: Request): Promise<Response> {
   const cfg = getServerConfig();
   const ip = extractClientIp(req);
@@ -220,6 +230,7 @@ export async function POST(req: Request): Promise<Response> {
   });
   if (!rl.allowed) {
     return jsonError(
+      req,
       429,
       'rate_limit_exceeded',
       'RATE_LIMITED',
@@ -232,32 +243,38 @@ export async function POST(req: Request): Promise<Response> {
   try {
     rawBody = await req.json();
   } catch {
-    return jsonError(400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
+    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
   }
 
   if (!isPlainRecord(rawBody)) {
-    return jsonError(400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
+    return jsonError(req, 400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
   }
 
+  const langParsed = parseLang(rawBody.lang);
+  if (!langParsed.ok) {
+    return jsonError(req, 400, 'invalid_lang', 'INVALID_INPUT', langParsed.message);
+  }
   const chartParsed = parseChart(rawBody.chart);
   if (!chartParsed.ok) {
-    return jsonError(400, 'invalid_chart', 'INVALID_INPUT', chartParsed.message);
+    return jsonError(req, 400, 'invalid_chart', 'INVALID_INPUT', chartParsed.message);
   }
   const messagesParsed = parseMessages(rawBody.messages);
   if (!messagesParsed.ok) {
-    return jsonError(400, 'invalid_messages', 'INVALID_INPUT', messagesParsed.message);
+    return jsonError(req, 400, 'invalid_messages', 'INVALID_INPUT', messagesParsed.message);
   }
   const targetYearParsed = parseTargetYear(rawBody.targetYear);
   if (!targetYearParsed.ok) {
-    return jsonError(400, 'invalid_target_year', 'INVALID_INPUT', targetYearParsed.message);
+    return jsonError(req, 400, 'invalid_target_year', 'INVALID_INPUT', targetYearParsed.message);
   }
 
+  const lang = langParsed.value;
   const chart = chartParsed.value;
   const messages = messagesParsed.value;
   const targetYear = targetYearParsed.value;
   const chartKey = getChartCacheKey(chart, { targetYear });
 
   // Strict paywall guard BEFORE every cache read or LLM invocation.
+  // Entitlement (`chartKey`) stays language-agnostic across UI language switches.
   if (cfg.aiPaywallMode === 'strict') {
     const token = extractBearerToken(req, rawBody.accessToken);
     let authorized = false;
@@ -268,51 +285,62 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     if (!authorized) {
-      return Response.json(
-        {
-          error: 'payment_required',
-          code: 'PAYWALL_LOCKED',
-          cacheKey: chartKey,
-        },
-        { status: 402 },
+      return withCors(
+        req,
+        Response.json(
+          {
+            error: 'payment_required',
+            code: 'PAYWALL_LOCKED',
+            cacheKey: chartKey,
+          },
+          { status: 402 },
+        ),
       );
     }
   }
 
   const msgHash = hashPromptMessages(messages);
-  const redisKey = buildInterpretRedisKey(chartKey, msgHash);
+  const topicKey = scopedTopicKey(msgHash, lang);
+  const redisKey = buildInterpretRedisKey(chartKey, msgHash, lang);
 
   const redisHit = await getCachedStreamText(redisKey);
   if (redisHit !== null) {
-    return new Response(createSseFromCachedText(redisHit), {
-      status: 200,
-      headers: {
-        ...SSE_HEADERS,
-        'X-Cache': 'HIT',
-      },
-    });
+    return withCors(
+      req,
+      new Response(createSseFromCachedText(redisHit), {
+        status: 200,
+        headers: {
+          ...SSE_HEADERS,
+          'X-Cache': 'HIT',
+        },
+      }),
+    );
   }
 
-  const pgHit = await getChartInterpretation(chartKey, msgHash);
+  const pgHit = await getChartInterpretation(chartKey, topicKey);
   if (pgHit !== null) {
     await setCachedStreamText(redisKey, pgHit.content).catch(() => undefined);
-    return new Response(createSseFromCachedText(pgHit.content), {
-      status: 200,
-      headers: {
-        ...SSE_HEADERS,
-        'X-Cache': 'HIT',
-      },
-    });
+    return withCors(
+      req,
+      new Response(createSseFromCachedText(pgHit.content), {
+        status: 200,
+        headers: {
+          ...SSE_HEADERS,
+          'X-Cache': 'HIT',
+        },
+      }),
+    );
   }
 
-  const patterns = await detectPatternsSafe(chart);
-  const systemPrompt = buildChartSystemPrompt(chart, { targetYear, patterns });
+  const patterns = detectPatterns(chart);
+  const systemPrompt = buildChartSystemPrompt(chart, { targetYear, patterns, lang });
   const model = resolveModelName(cfg);
 
   try {
     const stream = await streamLlmSse({
       systemPrompt,
       messages,
+      lang,
       signal: req.signal,
       onComplete: async (fullText: string) => {
         if (fullText.trim().length === 0) return;
@@ -320,7 +348,7 @@ export async function POST(req: Request): Promise<Response> {
           setCachedStreamText(redisKey, fullText).catch(() => undefined),
           saveChartInterpretation({
             cacheKey: chartKey,
-            topicKey: msgHash,
+            topicKey,
             content: fullText,
             provider: cfg.aiProvider,
             model,
@@ -329,16 +357,20 @@ export async function POST(req: Request): Promise<Response> {
       },
     });
 
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        ...SSE_HEADERS,
-        'X-Cache': 'MISS',
-      },
-    });
+    return withCors(
+      req,
+      new Response(stream, {
+        status: 200,
+        headers: {
+          ...SSE_HEADERS,
+          'X-Cache': 'MISS',
+        },
+      }),
+    );
   } catch (err) {
     if (err instanceof LlmConfigError) {
       return jsonError(
+        req,
         503,
         'llm_not_configured',
         err.code,
@@ -347,12 +379,19 @@ export async function POST(req: Request): Promise<Response> {
     }
     if (err instanceof LlmUpstreamError) {
       return jsonError(
+        req,
         502,
         'llm_upstream_error',
         err.code,
         'Upstream AI interpretation provider returned an error.',
       );
     }
-    return jsonError(500, 'internal_error', 'INTERNAL_ERROR', 'Unexpected error starting stream.');
+    return jsonError(
+      req,
+      500,
+      'internal_error',
+      'INTERNAL_ERROR',
+      'Unexpected error starting stream.',
+    );
   }
 }
