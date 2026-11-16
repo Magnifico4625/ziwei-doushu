@@ -168,7 +168,7 @@ export async function POST(req: Request): Promise<Response> {
     currency = parsedCurrency.toUpperCase();
   }
 
-  let amountMinor: number | undefined;
+  let amountMinor: number;
   if (rawBody.amountMinor !== undefined && rawBody.amountMinor !== null) {
     if (
       typeof rawBody.amountMinor !== 'number' ||
@@ -211,6 +211,14 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
     amountMinor = converted;
+  } else {
+    return jsonError(
+      req,
+      400,
+      'invalid_amount',
+      'INVALID_INPUT',
+      'amountMinor or amount is required and must be positive.',
+    );
   }
 
   let returnUrl: string | undefined;

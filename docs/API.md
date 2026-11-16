@@ -98,7 +98,7 @@ Checks PostgreSQL and Redis connectivity (reports in-memory fallback when unconf
 
 Generates deterministic natal charts or synastry comparisons, computes true solar time / historical IANA DST / CN DST warnings, detects patterns synchronously via `detectPatterns(chart)`, generates localized `freeLifePalace` readings (`命宫`), and returns localized pre-paywall teasers (`teasers`). Resolves localized city names via `findCityByQuery` (e.g., `"Москва"`, `"Moscow"`, `"莫斯科"`).
 
-- **Time zone validation**: Any supplied `tz` query param (`?tz=...`), `timeZone` query param (`?timeZone=...`), top-level `tz`/`timeZone`, or nested `birthInfo.{tz,timeZone}` / `form.{tz,timeZone}` / `chart*.birthInfo.timeZone` is strictly validated with `isValidTimeZone` / `[-720, 840]` offset bounds. Unknown zones such as `tz=Not/AZone` or `timeZone: "Not/AZone"` immediately return **`400 INVALID_INPUT`** (`invalid_timezone` / `invalid_birth_input` / `invalid_synastry_input`).
+- **Time zone validation**: Any supplied `tz` query param (`?tz=...`), `timeZone` query param (`?timeZone=...`), top-level `tz`/`timeZone`, or nested `birthInfo.{tz,timeZone}` / `form.{tz,timeZone}` / `chart*.birthInfo.{tz,timeZone}` is strictly validated with `isValidTimeZone` / `[-720, 840]` offset bounds. Unknown zones or empty strings (such as `tz=Not/AZone`, `timeZone: "Not/AZone"`, or `form.timeZone: ""`) immediately return **`400 INVALID_INPUT`** (`invalid_timezone` / `invalid_birth_input` / `invalid_synastry_input`). Omit `timeZone` (and pass `utcOffsetMinutes` / numeric `tz`) when applying a manual fixed UTC offset.
 - **Body limit**: `128 KiB` (`413 PAYLOAD_TOO_LARGE` when exceeded).
 
 #### Natal Mode Request
@@ -208,7 +208,7 @@ Creates a `'pending'` order record in `orders`, generates a cryptographic `order
 
 - `scope`: `'interpret' | 'heming' | 'bundle'`
 - `targetKey` (required, or aliases: `chartKey` for `'interpret'`, `pairKey` for `'heming'`, either for `'bundle'`; any `:y<targetYear>` suffix is normalized to the year-independent `entitlementKey`)
-- `amountMinor` (optional; if provided must be a **positive integer `> 0`**) or `amount` (optional; if provided must be a **positive finite number** resolving to at least `1` minor unit). Zero or negative amounts are rejected with `400 INVALID_INPUT`.
+- `amountMinor` or `amount` (**required**; one of the two must be provided): `amountMinor` must be a **positive integer `> 0`**, or `amount` must be a **positive finite number** resolving to at least `1` minor unit. Missing, zero, or negative amounts are rejected with `400 INVALID_INPUT`.
 
 **Response (`201 Created`, `Cache-Control: no-store`)**
 
@@ -228,7 +228,7 @@ Creates a `'pending'` order record in `orders`, generates a cryptographic `order
 }
 ```
 
-- Store `orderToken` on the initiating client session (or server backend) and pass it via `Authorization: Bearer <orderToken>` or `x-order-token` when polling `GET /api/billing/order`.
+- Store `orderToken` on the initiating client session (or server backend) and pass it via `Authorization: Bearer <orderToken>` or `x-order-token` headers when polling `GET /api/billing/order` (`?orderToken=` in query URLs is intentionally unsupported to prevent secret leakage into URL logs).
 - Errors: `400 INVALID_INPUT` / `BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `503 BILLING_UNCONFIGURED`.
 
 ---
@@ -276,9 +276,9 @@ Verifies HMAC-SHA256 webhook signature (`x-webhook-signature` or `x-signature`, 
 
 ### 5. `GET /api/billing/order?orderId=<orderId>`
 
-Polls payment state for frontend return URLs. **Requires authorization** via `orderToken` issued by `POST /api/billing/checkout` (prevents unauthorized callers with a leaked/guessed `orderId` from polling status or retrieving `accessToken`). Never exposes `accessToken` until `status === 'paid'`.
+Polls payment state for frontend return URLs. **Requires authorization** via `orderToken` issued by `POST /api/billing/checkout` (passed strictly via HTTP headers, never as a query param, and never exposing `accessToken` until `status === 'paid'`). Returns a uniform `401 UNAUTHORIZED` response for missing/invalid `orderToken` **and** for unknown `orderId`s so attackers cannot enumerate existing orders.
 
-**Headers (Required)**: `Authorization: Bearer <orderToken>` or `x-order-token: <orderToken>`
+**Headers (Required)**: `Authorization: Bearer <orderToken>` or `x-order-token: <orderToken>` (query param `?orderToken=` is ignored)
 
 **Responses (`Cache-Control: no-store`)**
 
@@ -310,7 +310,7 @@ Polls payment state for frontend return URLs. **Requires authorization** via `or
     "paidAt": "2026-11-15T10:31:00.000Z"
   }
   ```
-- Errors: `400 INVALID_INPUT` (missing `orderId`), `401 UNAUTHORIZED` (missing or invalid `orderToken`), `404 NOT_FOUND` (unknown `orderId` when authorized), `503 TOKEN_UNCONFIGURED`.
+- Errors: `400 INVALID_INPUT` (missing `orderId`), `401 UNAUTHORIZED` (uniformly returned for missing/invalid `orderToken` and unknown `orderId`), `503 TOKEN_UNCONFIGURED`.
 
 ---
 
@@ -338,7 +338,7 @@ Streams full AI chart interpretations in `text/event-stream` format using langua
 **Responses**
 
 - `200 OK`: `Content-Type: text/event-stream; charset=utf-8`, `X-Cache: HIT | MISS`.
-- `400 INVALID_INPUT` / `BAD_REQUEST` (including invalid `chart.birthInfo.timeZone`).
+- `400 INVALID_INPUT` / `BAD_REQUEST` (including invalid/empty `?tz=`, `?timeZone=`, `tz`, `timeZone`, or `chart.birthInfo.{tz,timeZone}`).
 - `402 Payment Required`: `{ "error": "payment_required", "code": "PAYWALL_LOCKED", "cacheKey": "<chartKey>", "entitlementKey": "<baseChartKey>" }`.
 - `413 PAYLOAD_TOO_LARGE`: body exceeds `128 KiB`.
 - `429 Too Many Requests`: `{ "error": "rate_limit_exceeded", "code": "RATE_LIMITED" }` + `Retry-After` header.
@@ -368,7 +368,7 @@ Computes two-person synastry (`analyzeSynastry`) and either returns a Zero-LLM t
 
 **Responses**
 
-- `previewOnly: true` (`200 OK`, `$0.00` LLM):
+- `previewOnly: true` (`200 OK`, `$0.00` LLM; still validates `?tz=`/`?timeZone=` and `chartA/chartB.birthInfo.{tz,timeZone}` -> `400`):
   ```json
   {
     "ok": true,
@@ -382,7 +382,7 @@ Computes two-person synastry (`analyzeSynastry`) and either returns a Zero-LLM t
   ```
 - Paid mode (`previewOnly` omitted or `false`, requires valid `accessToken` in `AI_PAYWALL_MODE=strict`):
   - `200 OK`: `Content-Type: text/event-stream; charset=utf-8`, `X-Cache: HIT | MISS`.
-  - `400 INVALID_INPUT` / `BAD_REQUEST` (including invalid `chartA/chartB.birthInfo.timeZone`).
+  - `400 INVALID_INPUT` / `BAD_REQUEST` (including invalid/empty `?tz=`, `?timeZone=`, `tz`, `timeZone`, or `chartA/chartB.birthInfo.{tz,timeZone}`).
   - `402 Payment Required`: `{ "error": "payment_required", "code": "PAYWALL_LOCKED", "pairKey": "<pairKey>", "entitlementKey": "<basePairKey>" }`.
   - `413 PAYLOAD_TOO_LARGE` / `429 RATE_LIMITED` / `502 LLM_UPSTREAM_ERROR` / `503 LLM_CONFIG_ERROR`.
 
@@ -392,11 +392,10 @@ Computes two-person synastry (`analyzeSynastry`) and either returns a Zero-LLM t
 
 | Status | Endpoint(s) | `code` | `error` | Meaning |
 |---|---|---|---|---|
-| `400` | All POST/order | `BAD_REQUEST` / `INVALID_INPUT` | `invalid_*` / `missing_order_id` | Malformed JSON/body, invalid date/zone (`tz=Not/AZone`), or non-positive checkout amount |
-| `401` | `/api/billing/webhook`, `/api/billing/order` | `UNAUTHORIZED` | `invalid_signature` / `unauthorized` / `invalid_order_token` | Missing/bad webhook HMAC or missing/bad `orderToken` |
+| `400` | All POST/order | `BAD_REQUEST` / `INVALID_INPUT` | `invalid_*` / `missing_order_id` | Malformed JSON/body, invalid/empty date or zone (`tz=Not/AZone`, `form.timeZone: ""`), or missing/non-positive checkout amount |
+| `401` | `/api/billing/webhook`, `/api/billing/order` | `UNAUTHORIZED` | `invalid_signature` / `unauthorized` | Missing/bad webhook HMAC, missing/bad `orderToken`, or unknown `orderId` (uniform response) |
 | `402` | `/api/interpret`, `/api/heming` | `PAYWALL_LOCKED` | `payment_required` | Missing, expired, wrong-scope, or mismatched `accessToken` |
 | `403` | All `OPTIONS` | `CORS_FORBIDDEN` | `cors_origin_denied` | Disallowed `Origin` header on preflight |
-| `404` | `/api/billing/order` | `NOT_FOUND` | `order_not_found` | Order not found (checked only after `orderToken` is supplied) |
 | `413` | All `POST` | `PAYLOAD_TOO_LARGE` | `payload_too_large` | Body exceeds `128 KiB` (`/chart`, `/interpret`, `/heming`) or `32 KiB` (`/billing/*`) |
 | `429` | `/chart`, `/interpret`, `/heming` | `RATE_LIMITED` | `rate_limit_exceeded` | Per-IP rate limit exceeded (`Retry-After` set) |
 | `502` | `/interpret`, `/heming` | `LLM_UPSTREAM_ERROR` | `llm_upstream_error` | Upstream LLM provider error |

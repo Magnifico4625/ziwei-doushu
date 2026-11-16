@@ -15,7 +15,6 @@ export type TimeZoneParseResult<T> =
 export function parseIanaTimeZoneField(
   raw: unknown,
   fieldName: string,
-  options?: { allowEmptyString?: boolean },
 ): TimeZoneParseResult<string | undefined> {
   if (raw === undefined || raw === null) {
     return { ok: true, value: undefined };
@@ -25,9 +24,6 @@ export function parseIanaTimeZoneField(
   }
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
-    if (options?.allowEmptyString && raw === '') {
-      return { ok: true, value: '' };
-    }
     return { ok: false, message: `${fieldName} must be a valid IANA time zone` };
   }
   if (!isValidTimeZone(trimmed)) {
@@ -109,4 +105,27 @@ export function parseQueryTimezoneParams(req: Request): TimeZoneParseResult<Pars
   }
 
   return { ok: true, value: merged };
+}
+
+export function parseRequestTimezoneOverride(
+  req: Request,
+  rawBody: Record<string, unknown>,
+): TimeZoneParseResult<ParsedTzAlias> {
+  const queryZone = parseQueryTimezoneParams(req);
+  if (!queryZone.ok) return queryZone;
+
+  const bodyTz = parseTzAliasField(rawBody.tz, 'tz');
+  if (!bodyTz.ok) return bodyTz;
+
+  const bodyTimeZone = parseIanaTimeZoneField(rawBody.timeZone, 'timeZone');
+  if (!bodyTimeZone.ok) return bodyTimeZone;
+
+  return {
+    ok: true,
+    value: {
+      ...queryZone.value,
+      ...bodyTz.value,
+      ...(bodyTimeZone.value !== undefined ? { timeZone: bodyTimeZone.value } : {}),
+    },
+  };
 }
