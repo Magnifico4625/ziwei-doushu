@@ -145,6 +145,34 @@ export function loadSchoolConfig(): SchoolConfig {
   }
 }
 
+export const VALID_BRIGHTNESS_SCHOOLS = ['default', 'QS', 'XD1', 'ZZ', 'XD2'] as const;
+
+export const VALID_LEAP_MONTH_POLICIES = [
+  'split',
+  'next-month',
+  'prev-month',
+  'origin-month',
+] as const;
+
+export function isValidBrightnessSchoolOption(value: unknown): value is BrightnessSchoolOption {
+  return (
+    value === 'default'
+    || value === 'QS'
+    || value === 'XD1'
+    || value === 'ZZ'
+    || value === 'XD2'
+  );
+}
+
+export function isValidLeapMonthPolicy(value: unknown): value is LeapMonth {
+  return (
+    value === 'split'
+    || value === 'next-month'
+    || value === 'prev-month'
+    || value === 'origin-month'
+  );
+}
+
 /**
  * ★ 2026-10-18 默认项与它底层的那张表只留一项（站长：两项排出来一样，别并排摆）。
  * ★ 2026-10-20 默认改成《斗数全书》（主流排盘默认口径，见 algorithm.ts setBrightnessSchool），归并方向随之改：

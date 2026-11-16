@@ -7,7 +7,7 @@ import {
 import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { recordWebhookOrderIfNew } from '@/lib/server/db';
 import { MAX_BILLING_BODY_BYTES, readTextBodyWithLimit } from '@/lib/server/request-body';
-import { stripYearSuffixFromKey } from '@/lib/ziwei/chart-analyzer';
+import { normalizeEntitlementKey } from '@/lib/ziwei/chart-analyzer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -102,7 +102,7 @@ export async function POST(req: Request): Promise<Response> {
       'Required fields: eventId, orderId, scope (interpret|heming|bundle), targetKey, status.',
     );
   }
-  const targetKey = stripYearSuffixFromKey(rawTargetKey);
+  const targetKey = normalizeEntitlementKey(rawTargetKey);
 
   let amountMinor: number | undefined;
   if (parsedBody.amountMinor !== undefined && parsedBody.amountMinor !== null) {

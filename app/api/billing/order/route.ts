@@ -6,7 +6,7 @@ import {
 } from '@/lib/server/access-token';
 import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { getOrder } from '@/lib/server/db';
-import { stripYearSuffixFromKey } from '@/lib/ziwei/chart-analyzer';
+import { normalizeEntitlementKey } from '@/lib/ziwei/chart-analyzer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -106,7 +106,7 @@ export async function GET(req: Request): Promise<Response> {
     );
   }
 
-  const normalizedTargetKey = stripYearSuffixFromKey(order.targetKey);
+  const normalizedTargetKey = normalizeEntitlementKey(order.targetKey);
   const accessToken = signAccessToken(
     {
       scope: order.scope,

@@ -3,7 +3,7 @@
  * 所有摘要比对均使用 node:crypto timingSafeEqual 防止时序侧信道。
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { stripYearSuffixFromKey } from '../ziwei/chart-analyzer';
+import { normalizeEntitlementKey } from '../ziwei/chart-analyzer';
 import { getServerConfig } from './env';
 
 export type EntitlementScope = 'interpret' | 'heming' | 'bundle';
@@ -190,7 +190,7 @@ export function verifyAccessToken(
 
   if (
     expectedKey !== undefined &&
-    stripYearSuffixFromKey(parsedPayload.targetKey) !== stripYearSuffixFromKey(expectedKey)
+    normalizeEntitlementKey(parsedPayload.targetKey) !== normalizeEntitlementKey(expectedKey)
   ) {
     return { valid: false, reason: 'target_key_mismatch' };
   }

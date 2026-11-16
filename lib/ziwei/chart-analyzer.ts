@@ -20,6 +20,8 @@ import type {
 import { BRANCHES, STEMS } from './constants';
 import {
   DEFAULT_LEAP_MONTH,
+  isValidBrightnessSchoolOption,
+  isValidLeapMonthPolicy,
   type BrightnessSchoolOption,
   type LeapMonth,
 } from './school-config';
@@ -360,20 +362,26 @@ function uniqueStrings(items: readonly string[]): string[] {
   return out;
 }
 
-function isLeapMonthPolicy(value: unknown): value is LeapMonth {
-  return (
-    value === 'split'
-    || value === 'next-month'
-    || value === 'prev-month'
-    || value === 'origin-month'
-  );
-}
-
 function readChartLeapMonthPolicy(chart: ZiweiChart): LeapMonth | undefined {
+  if (isValidLeapMonthPolicy(chart.leapMonthPolicy)) {
+    return chart.leapMonthPolicy;
+  }
   const birthObj: unknown = chart.birthInfo;
   if (birthObj && typeof birthObj === 'object' && 'leapMonthPolicy' in birthObj) {
     const candidate = (birthObj as { leapMonthPolicy?: unknown }).leapMonthPolicy;
-    if (isLeapMonthPolicy(candidate)) return candidate;
+    if (isValidLeapMonthPolicy(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function readChartBrightnessSchool(chart: ZiweiChart): BrightnessSchoolOption | undefined {
+  if (isValidBrightnessSchoolOption(chart.brightnessSchool)) {
+    return chart.brightnessSchool;
+  }
+  const birthObj: unknown = chart.birthInfo;
+  if (birthObj && typeof birthObj === 'object' && 'brightnessSchool' in birthObj) {
+    const candidate = (birthObj as { brightnessSchool?: unknown }).brightnessSchool;
+    if (isValidBrightnessSchoolOption(candidate)) return candidate;
   }
   return undefined;
 }
@@ -672,7 +680,9 @@ export function getBirthChartKeyParams(
   }
 
   const solarDate = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  const brightnessSchool = normalizeBrightnessSchool(options?.brightnessSchool);
+  const brightnessSchool = normalizeBrightnessSchool(
+    options?.brightnessSchool ?? readChartBrightnessSchool(chart),
+  );
   const leapMonthPolicy =
     options?.leapMonthPolicy
     ?? readChartLeapMonthPolicy(chart)
@@ -694,6 +704,8 @@ export function getBirthChartKeyParams(
 }
 
 const CANONICAL_YEAR_SUFFIX_RE = /^((?:ziwei|heming):v\d+:.+?):y\d+$/;
+const CANONICAL_NATAL_KEY_SCHOOL_RE =
+  /^(ziwei:v\d+:[^:]+:\d+:(?:male|female)):(?:default|QS|XD1|ZZ|XD2):([^:]+)$/;
 
 /**
  * Strip the trailing `:y<year>` cache-partition suffix from canonical chart or pair keys
@@ -706,8 +718,19 @@ export function stripYearSuffixFromKey(key: string): string {
 }
 
 /**
+ * Normalize a canonical chart or pair key for entitlement comparison and storage:
+ * strips any trailing `:y<year>` suffix and canonicalizes natal brightness schools
+ * (`QS`, `XD1`, `ZZ`, `XD2`, `default`) to `:default:` so switching schools never blocks access.
+ */
+export function normalizeEntitlementKey(key: string): string {
+  const withoutYear = stripYearSuffixFromKey(key);
+  const schoolMatch = CANONICAL_NATAL_KEY_SCHOOL_RE.exec(withoutYear);
+  return schoolMatch ? `${schoolMatch[1]}:default:${schoolMatch[2]}` : withoutYear;
+}
+
+/**
  * Generate a canonical deterministic cache key for a ZiweiChart.
- * Includes optional `:y<targetYear>` suffix to isolate annual cached text.
+ * Includes the resolved brightnessSchool and optional `:y<targetYear>` suffix to isolate cached text.
  */
 export function getChartCacheKey(
   chart: ZiweiChart,
@@ -719,14 +742,14 @@ export function getChartCacheKey(
 }
 
 /**
- * Return the year-independent canonical entitlement key for a natal chart.
+ * Return the year- and school-independent canonical entitlement key for a natal chart.
  */
 export function getChartEntitlementKey(
   chart: ZiweiChart,
   options?: Omit<ChartCacheKeyOptions, 'targetYear'>,
 ): string {
   return getChartCacheKey(chart, {
-    brightnessSchool: options?.brightnessSchool,
+    brightnessSchool: 'default',
     leapMonthPolicy: options?.leapMonthPolicy,
   });
 }

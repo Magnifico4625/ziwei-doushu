@@ -8,7 +8,7 @@ This document specifies the HTTP API routes, billing lifecycle, CORS configurati
    - `app/api/chart/route.ts` (`POST /api/chart`) **never imports `lib/server/llm.ts`** and computes natal charts, synastry comparisons, patterns (`detectPatterns`), free Life Palace (`命宫`) readings, and paywall teasers purely deterministically.
    - `app/api/heming/route.ts` imports `lib/server/llm.ts` for its paid SSE branch, while requests with `previewOnly: true` short-circuit and return before rate limiting, paywall verification, or any LLM call (`$0.00` AI cost).
 2. **Strict Token-Based Paywall Guard**: With `AI_PAYWALL_MODE=strict` (default), paid endpoints (`POST /api/interpret`, paid `POST /api/heming`) **always** require a valid HMAC-signed `accessToken` (`Authorization: Bearer <accessToken>` or JSON body `accessToken`) **before** reading paid cache or invoking any LLM, returning `402 PAYWALL_LOCKED` otherwise (never granting access from a bare `cacheKey` or `pairKey` alone).
-3. **Year- & Language-Agnostic Entitlements + Isolated Caches**: Purchases bind to the base `entitlementKey` (without `:y<targetYear>` or `lang`), so a report bought with or without a target year authorizes timeless and annual queries across `'ru' | 'zh' | 'en'`. Meanwhile, cached texts in Redis and PostgreSQL remain isolated per `:y<targetYear>` and per language.
+3. **Year-, School- & Language-Agnostic Entitlements + Isolated Caches**: Purchases bind to the canonical base `entitlementKey` (`:default:` school, without `:y<targetYear>` or `lang`), so a report bought under `QS` (`default`) or `XD2`, with or without a target year, authorizes queries across schools (`'QS' | 'XD1' | 'ZZ' | 'XD2'`), years, and languages (`'ru' | 'zh' | 'en'`). Meanwhile, cached texts in Redis and PostgreSQL remain isolated per resolved `brightnessSchool` (`cacheKey` / `pairKey`), `:y<targetYear>`, and language.
 4. **Commercial MIT Runtime Cleanliness**: Runtime modules (`lib/ziwei/*`, `lib/server/*`, `app/api/*`) contain zero `CC BY-NC-SA 4.0` lecture quotes (`ni_quote` / `docs/tianji-ziwei/`), and core modules (`lib/ziwei/patterns.ts`, `lib/ziwei/famous.ts`) have zero `server-only` dependencies.
 
 ---
@@ -60,17 +60,20 @@ Every JSON/webhook `POST` route enforces hard byte caps (checking both `Content-
 
 ---
 
-## Canonical Keys & Year Suffixes (`cacheKey` / `pairKey` vs `entitlementKey`)
+## Canonical Keys, Schools & Year Suffixes (`cacheKey` / `pairKey` vs `entitlementKey`)
 
 - **Natal chart cache key** (`getChartCacheKey(chart, { targetYear })`):
-  - Without year (also the **`entitlementKey`**): `ziwei:v1:<solarDate>:<hour>:<gender>:<brightnessSchool>:<leapMonthPolicy>`
-  - With `targetYear`: `<base>:y<targetYear>` (for example `ziwei:v1:1990-05-15:4:male:default:split:y2026`)
+  - Without year: `ziwei:v1:<solarDate>:<hour>:<gender>:<brightnessSchool>:<leapMonthPolicy>` (`:default:` for `QS`, `:XD2:` for `XD2`, etc.)
+  - With `targetYear`: `<base>:y<targetYear>` (for example `ziwei:v1:1990-05-15:4:male:XD2:split:y2026`)
+- **Natal entitlement key** (`getChartEntitlementKey(chart)`):
+  - Always normalized to `:default:` without `:y<targetYear>` (`ziwei:v1:<solarDate>:<hour>:<gender>:default:<leapMonthPolicy>`), so purchasing under `QS` or `XD2` unlocks both schools.
 - **Synastry cache key** (`canonicalPairKey(chartA, chartB, targetYear)`):
-  - Without year (also the **`entitlementKey`**): `heming:v1:<sha256_32(first|second)>` (canonical sorted chart keys `first <= second`)
-  - With `targetYear`: `heming:v1:<sha256_32(first|second)>:y<targetYear>`
+  - Hashes sorted `getChartCacheKey` values (isolating `XD2` vs `QS` caches): `heming:v1:<sha256_32(first|second)>[:y<targetYear>]`
+- **Synastry entitlement key** (`canonicalPairEntitlementKey(chartA, chartB)`):
+  - Hashes sorted school-agnostic `getChartEntitlementKey` values (no `:y<targetYear>` suffix), keeping pair purchases valid across school switches.
 - **Why both keys exist**:
-  - `:y<targetYear>` isolates annual interpretations from timeless interpretations in Redis and PostgreSQL (`chart_interpretations`, `synastry_interpretations`).
-  - Billing (`checkout`, `webhook`, `verifyAccessToken`) strips any trailing `:y<targetYear>` via `stripYearSuffixFromKey`, so buying a report with or without `targetYear` unlocks both timeless and any annual query for the same chart or pair.
+  - `brightnessSchool` and `:y<targetYear>` in `cacheKey` / `pairKey` isolate school-specific and annual interpretations in Redis and PostgreSQL (`chart_interpretations`, `synastry_interpretations`) so `XD2` and `QS` never overwrite each other.
+  - Billing (`checkout`, `webhook`, `verifyAccessToken`, `hasPaidEntitlement`) normalizes both `:y<targetYear>` and natal brightness school (`QS`, `XD1`, `ZZ`, `XD2` -> `:default:`) via `normalizeEntitlementKey`, so buying once unlocks timeless/annual queries across schools without `402`.
 
 ---
 
@@ -99,6 +102,10 @@ Checks PostgreSQL and Redis connectivity (reports in-memory fallback when unconf
 Generates deterministic natal charts or synastry comparisons, computes true solar time / historical IANA DST / CN DST warnings, detects patterns synchronously via `detectPatterns(chart)`, generates localized `freeLifePalace` readings (`命宫`), and returns localized pre-paywall teasers (`teasers`). Resolves localized city names via `findCityByQuery` (e.g., `"Москва"`, `"Moscow"`, `"莫斯科"`).
 
 - **Time zone validation**: Any supplied `tz` query param (`?tz=...`), `timeZone` query param (`?timeZone=...`), top-level `tz`/`timeZone`, or nested `birthInfo.{tz,timeZone}` / `form.{tz,timeZone}` / `chart*.birthInfo.{tz,timeZone}` is strictly validated with `isValidTimeZone` / `[-720, 840]` offset bounds. Unknown zones or empty strings (such as `tz=Not/AZone`, `timeZone: "Not/AZone"`, or `form.timeZone: ""`) immediately return **`400 INVALID_INPUT`** (`invalid_timezone` / `invalid_birth_input` / `invalid_synastry_input`). Omit `timeZone` (and pass `utcOffsetMinutes` / numeric `tz`) when applying a manual fixed UTC offset.
+- **Brightness school & active DaXian (`brightnessSchool`, `leapMonthPolicy`, `referenceDate` / `referenceYear`)**:
+  - `brightnessSchool`: optional per-request school (`'default' | 'QS' | 'XD1' | 'ZZ' | 'XD2'`; invalid -> `400 INVALID_INPUT`). Defaults to `'default'` (`'QS'`) for backward compatibility. Dataset `v4.0-13d` report workflows must pass `"brightnessSchool": "XD2"` explicitly (does not mutate any global school state). The resolved school (`'QS' | 'XD1' | 'ZZ' | 'XD2'`) is returned on both `response.brightnessSchool` and `chart.brightnessSchool` and automatically scopes `cacheKey` / `entitlementKey`. See [`docs/DATASET-CALENDAR-CONTRACT.md`](./DATASET-CALENDAR-CONTRACT.md).
+  - `leapMonthPolicy`: optional `'split' | 'next-month' | 'prev-month' | 'origin-month'` (defaults to `'split'`).
+  - `referenceDate` (`YYYY-MM-DD`) / `referenceYear` (integer `100..9999`): optional calculation reference for deterministic `chart.currentAge` / `chart.currentDaXianIndex` / active `DaXian` period.
 - **Body limit**: `128 KiB` (`413 PAYLOAD_TOO_LARGE` when exceeded).
 
 #### Natal Mode Request
@@ -109,6 +116,8 @@ Accepts either `birthInfo` (numeric `hour` branch index `0..11`) or UI `form` (`
 {
   "lang": "ru",
   "lateZishi": "next-day",
+  "brightnessSchool": "XD2",
+  "referenceDate": "2026-06-15",
   "targetYear": 2026,
   "birthInfo": {
     "year": 1992,
@@ -128,8 +137,10 @@ Accepts either `birthInfo` (numeric `hour` branch index `0..11`) or UI `form` (`
   "ok": true,
   "mode": "natal",
   "lang": "ru",
-  "cacheKey": "ziwei:v1:1992-06-15:6:male:default:split:y2026",
-  "entitlementKey": "ziwei:v1:1992-06-15:6:male:default:split",
+  "brightnessSchool": "XD2",
+  "leapMonthPolicy": "split",
+  "cacheKey": "ziwei:v1:1992-06-15:6:male:XD2:split:y2026",
+  "entitlementKey": "ziwei:v1:1992-06-15:6:male:XD2:split",
   "chart": { "...": "ZiweiChart" },
   "summary": { "...": "ChartAnalysisSummary" },
   "patterns": [ { "...": "Pattern" } ],
@@ -175,6 +186,8 @@ Send pairs using `chartA`/`birthInfoA`/`formA` and `chartB`/`birthInfoB`/`formB`
   "ok": true,
   "mode": "synastry",
   "lang": "ru",
+  "brightnessSchool": "QS",
+  "leapMonthPolicy": "split",
   "pairKey": "heming:v1:<32-hex>:y2026",
   "entitlementKey": "heming:v1:<32-hex>",
   "chartA": { "...": "ZiweiChart" },
@@ -207,7 +220,7 @@ Creates a `'pending'` order record in `orders`, generates a cryptographic `order
 ```
 
 - `scope`: `'interpret' | 'heming' | 'bundle'`
-- `targetKey` (required, or aliases: `chartKey` for `'interpret'`, `pairKey` for `'heming'`, either for `'bundle'`; any `:y<targetYear>` suffix is normalized to the year-independent `entitlementKey`)
+- `targetKey` (required, or aliases: `chartKey` for `'interpret'`, `pairKey` for `'heming'`, either for `'bundle'`; any `:y<targetYear>` suffix and natal brightness school `QS|XD1|ZZ|XD2` are normalized to the canonical `entitlementKey` via `normalizeEntitlementKey`)
 - `amountMinor` or `amount` (**required**; one of the two must be provided): `amountMinor` must be a **positive integer `> 0`**, or `amount` must be a **positive finite number** resolving to at least `1` minor unit. Missing, zero, or negative amounts are rejected with `400 INVALID_INPUT`.
 
 **Response (`201 Created`, `Cache-Control: no-store`)**
@@ -254,7 +267,7 @@ Verifies HMAC-SHA256 webhook signature (`x-webhook-signature` or `x-signature`, 
 }
 ```
 
-- If `amountMinor` is included, it must be a positive integer (`> 0`). Any `:y<targetYear>` suffix in `targetKey` is stripped cleanly.
+- If `amountMinor` is included, it must be a positive integer (`> 0`). Any `:y<targetYear>` suffix and natal brightness school in `targetKey` are normalized cleanly via `normalizeEntitlementKey`.
 
 **Response (`200 OK`)**
 
@@ -422,7 +435,7 @@ Apply `db/schema.sql` against PostgreSQL before enabling `DATABASE_URL`:
 All modules in `lib/ziwei/` run directly in Node/`tsx` without Next.js or `server-only`:
 
 ```ts
-import { generateChart } from './lib/ziwei/algorithm';
+import { generateChart, generateDatasetChart } from './lib/ziwei/algorithm';
 import { findCityByQuery } from './lib/ziwei/cities';
 import { detectPatterns } from './lib/ziwei/patterns';
 import {
@@ -434,23 +447,27 @@ import { generateChartTeasers } from './lib/ziwei/paywall-teasers';
 import { translateChartSummary } from './lib/ziwei/i18n';
 
 const match = findCityByQuery('Москва', 'ru');
-const chart = generateChart({
-  year: 1992,
-  month: 6,
-  day: 15,
-  hour: 6,
-  gender: 'male',
-  province: match?.provinceName,
-  city: match?.city.name,
-  longitude: match?.city.longitude,
-  utcOffsetMinutes: match?.city.utcOffsetMinutes,
-  timeZone: match?.city.timeZone,
-});
+const chart = generateDatasetChart(
+  {
+    year: 1992,
+    month: 6,
+    day: 15,
+    hour: 6,
+    gender: 'male',
+    province: match?.provinceName,
+    city: match?.city.name,
+    longitude: match?.city.longitude,
+    utcOffsetMinutes: match?.city.utcOffsetMinutes,
+    timeZone: match?.city.timeZone,
+  },
+  { referenceDate: '2026-06-15' },
+);
+// Or explicitly: generateChart(birthInfo, { brightnessSchool: 'XD2', referenceYear: 2026 })
 
 const summary = analyzeChartSummary(chart, { targetYear: 2026 });
 const patterns = detectPatterns(chart);
 const teasers = generateChartTeasers(chart, summary, patterns, 'ru');
 const localized = translateChartSummary(chart, summary, patterns, 'ru');
-const cacheKey = getChartCacheKey(chart, { targetYear: 2026 });       // ziwei:v1:...:y2026
-const entitlementKey = getChartEntitlementKey(chart);                  // ziwei:v1:...
+const cacheKey = getChartCacheKey(chart, { targetYear: 2026 });       // ziwei:v1:...:XD2:split:y2026
+const entitlementKey = getChartEntitlementKey(chart);                  // ziwei:v1:...:default:split (school- & year-agnostic)
 ```

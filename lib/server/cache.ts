@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import Redis from 'ioredis';
-import { getChartCacheKey } from '../ziwei/chart-analyzer';
+import { getChartCacheKey, getChartEntitlementKey } from '../ziwei/chart-analyzer';
 import { normalizeLang, type SupportedLang } from '../ziwei/i18n';
 import type { ZiweiChart } from '../ziwei/types';
 import { getServerConfig } from './env';
@@ -205,11 +205,19 @@ export function canonicalPairKey(
     : `heming:v1:${digest}`;
 }
 
+/**
+ * Return the year- and school-independent canonical synastry entitlement key
+ * so purchases remain valid regardless of targetYear or brightnessSchool.
+ */
 export function canonicalPairEntitlementKey(
   chartA: ZiweiChart,
   chartB: ZiweiChart,
 ): string {
-  return canonicalPairKey(chartA, chartB);
+  const keyA = getChartEntitlementKey(chartA);
+  const keyB = getChartEntitlementKey(chartB);
+  const [first, second] = keyA <= keyB ? [keyA, keyB] : [keyB, keyA];
+  const digest = sha256Hex(`${first}|${second}`, 32);
+  return `heming:v1:${digest}`;
 }
 
 export function buildSynastryRedisKey(

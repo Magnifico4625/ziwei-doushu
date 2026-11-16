@@ -301,7 +301,7 @@ npm run dev
 
 ```bash
 npm run typecheck             # TypeScript 全量类型检查
-npm test                      # 20 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析、服务端基础设施与 API 路由、三语 i18n/付费钩子/商用合规、商业化支付与多语言 API）
+npm test                      # 21 条回归脚本（768 盘 × 紫微铁律、夏令时、立春边界、红鸾天喜、样本时辰一致性、时辰序号边界、日期合法性、样本无效公历日期、同宫双四化、中立命名、海外/俄/独联体城市与 IANA 时区、确定性合盘与命盘分析、单次亮度流派隔离 XD2/QS 与 1990 数据集日历校准、服务端基础设施与 API 路由、三语 i18n/付费钩子/商用合规、商业化支付与多语言 API）
 npm run test:i18n-teasers-license   # 单独运行三语本地化、免费命宫与商用合规回归
 npm run test:stage3-commercial      # 单独运行支付闭环、CORS 与多语言后端 API 回归
 npm run build                 # Next.js 生产构建检查
@@ -313,12 +313,12 @@ npm run build                 # Next.js 生产构建检查
 > - 纯前端排盘、命盘展示、合盘起盘依旧在浏览器里用本仓库的引擎完成，**不需要任何 API Key 或数据库**。
 > - 本仓库现已内置 Next.js App Router 后端路由（`app/api/`）与服务端基础设施（`lib/server/`、`db/schema.sql`），并默认启用多语言（`lang: 'ru' | 'zh' | 'en'`）与 `ALLOWED_ORIGINS` 跨域白名单（`lib/server/cors.ts`，所有 7 个 `/api/*` 路由均导出 `OPTIONS` 预检并用 `withCors` 包装响应，允许 `X-Order-Token` 等请求头）：
 >   - `GET /api/health`：检查 PostgreSQL 与 Redis 健康状态（未配置 `DATABASE_URL` / `REDIS_URL` 时自动降级为内存模式），返回非敏感配置（`aiProvider`、`paywallMode`）。
->   - `POST /api/chart`：**零 LLM（Zero-LLM，$0 AI 成本，绝不导入 `lib/server/llm.ts`）** 预检与免费排盘接口，请求体上限 `128 KiB`（超限返回 `413 PAYLOAD_TOO_LARGE`），严格校验 `?tz=`/`timeZone`/`tz`（含空字符串及 `Not/AZone` 等非法时区均返回 `400 INVALID_INPUT`），支持 `lang: 'ru' | 'zh' | 'en'`、多语言城市检索（`findCityByQuery`，支持 `Москва` / `Moscow` / `莫斯科`）、同步直接格局识别（`detectPatterns`）、免费确定性 `命宫` 解读（`freeLifePalace`）、多语言付费钩子（`teasers`）与年份无关权益键 `entitlementKey`（区分含 `:y<targetYear>` 的缓存键 `cacheKey`/`pairKey`）。
+>   - `POST /api/chart`：**零 LLM（Zero-LLM，$0 AI 成本，绝不导入 `lib/server/llm.ts`）** 预检与免费排盘接口，请求体上限 `128 KiB`（超限返回 `413 PAYLOAD_TOO_LARGE`），严格校验 `?tz=`/`timeZone`/`tz`（含空字符串及 `Not/AZone` 等非法时区均返回 `400 INVALID_INPUT`），支持按请求显式指定 `brightnessSchool`（`'default' | 'QS' | 'XD1' | 'ZZ' | 'XD2'`，不修改全局状态；默认保持 `QS`，数据集 `v4.0-13d` 场景显式传 `'XD2'`）、`leapMonthPolicy` 与 `referenceDate`/`referenceYear`（确定性计算当前大限），在结果与缓存键中体现实际流派（日历契约见 [`docs/DATASET-CALENDAR-CONTRACT.md`](./docs/DATASET-CALENDAR-CONTRACT.md)）；同时支持 `lang: 'ru' | 'zh' | 'en'`、多语言城市检索（`findCityByQuery`，支持 `Москва` / `Moscow` / `莫斯科`）、同步直接格局识别（`detectPatterns`）、免费确定性 `命宫` 解读（`freeLifePalace`）、多语言付费钩子（`teasers`）以及与流派/年份无关的权益键 `entitlementKey`（区分含流派与 `:y<targetYear>` 的缓存键 `cacheKey`/`pairKey`）。
 >   - **完整商业化支付闭环**（`/api/billing/*`，请求体上限 `32 KiB`，超限返回 `413`）：
 >     - `POST /api/billing/checkout`：校验 `scope`（`interpret` / `heming` / `bundle`）、自动剥离 `:y<targetYear>` 的 `targetKey` 与**必填正数金额**（必须传 `amountMinor > 0` 或 `amount > 0`，缺失或 `<= 0` 返回 `400`），创建 `'pending'` 订单并返回 `orderId`、订单查询凭证 `orderToken` 与 `checkoutUrl`（配置项 `APP_PUBLIC_URL`、`BILLING_PROVIDER`、`BILLING_CHECKOUT_BASE_URL`）。
 >     - `GET /api/billing/order?orderId=...`：强制通过 `X-Order-Token` 或 `Authorization: Bearer` 请求头校验 `orderToken`（为防 URL 日志泄露，不支持在 query 参数中传 `orderToken`；缺失/无效凭证或未知 `orderId` 均统一返回 `401 UNAUTHORIZED`）；未支付时仅返回 `paid: false`（绝不泄露 `accessToken`），`paid` 后签发并返回年份无关的 HMAC `accessToken`。
 >     - `POST /api/billing/webhook`：通过 `PAYWALL_WEBHOOK_SECRET` 校验 HMAC-SHA256 签名（`timingSafeEqual`），拒收 `amountMinor <= 0`（`400`）并剥离 `:y<targetYear>` 落库/赋权，支持将 `'pending'` 订单原子流转为 `'paid'`（保留 `claim_token_hash`），并在 `status === 'paid'` 时签发 HMAC `accessToken`。
->   - `POST /api/interpret` 与 `POST /api/heming`：请求体上限 `128 KiB`（`413`），校验 `?tz=`/`timeZone`/`tz` 及命盘 `timeZone`/`tz`（非法或空值返回 `400`），支持 `lang: 'ru' | 'zh' | 'en'` 与多语言系统提示词；默认开启严格付费守卫 `AI_PAYWALL_MODE=strict`，**必须**提供有效签名 `accessToken`（`Authorization: Bearer` 或 `accessToken` 字段，不凭裸 `chartKey`/`pairKey` 放行），基于去除了 `:y<targetYear>` 且语言无关的 `entitlementKey` 校验权限（带年与无年报告共用同一权益，同时保留 `:y<targetYear>` 与语言隔离的 Redis + PostgreSQL 双层缓存），未授权在读付费缓存或调 LLM 前返回 `402 PAYWALL_LOCKED`，缺少或无效模型配置返回 `503 LLM_CONFIG_ERROR`。`/api/heming` 虽引入 `lib/server/llm.ts` 用于付费 SSE，但 `previewOnly: true` 会在限流、付费校验与大模型调用之前直接返回零 LLM 本地化合盘总览与 `teasers`。本地开发免付费联调 AI 时，可在 `.env.local` 中设置 `AI_PAYWALL_MODE=off` 与对应模型 Key。
+>   - `POST /api/interpret` 与 `POST /api/heming`：请求体上限 `128 KiB`（`413`），校验 `?tz=`/`timeZone`/`tz` 及命盘 `timeZone`/`tz`（非法或空值返回 `400`），支持 `lang: 'ru' | 'zh' | 'en'` 与多语言系统提示词；默认开启严格付费守卫 `AI_PAYWALL_MODE=strict`，**必须**提供有效签名 `accessToken`（`Authorization: Bearer` 或 `accessToken` 字段，不凭裸 `chartKey`/`pairKey` 放行），基于归一化后的 `entitlementKey`（去除 `:y<targetYear>`、与流派和语言无关）校验权限（`QS`/`XD2`、带年与无年报告共用同一权益，同时保留按流派、`:y<targetYear>` 与语言隔离的 Redis + PostgreSQL 双层缓存），未授权在读付费缓存或调 LLM 前返回 `402 PAYWALL_LOCKED`，缺少或无效模型配置返回 `503 LLM_CONFIG_ERROR`。`/api/heming` 虽引入 `lib/server/llm.ts` 用于付费 SSE，但 `previewOnly: true` 会在限流、付费校验与大模型调用之前直接返回零 LLM 本地化合盘总览与 `teasers`。本地开发免付费联调 AI 时，可在 `.env.local` 中设置 `AI_PAYWALL_MODE=off` 与对应模型 Key。
 
 ---
 

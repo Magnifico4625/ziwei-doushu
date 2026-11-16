@@ -24,7 +24,14 @@ import {
   scopedQuestionHash,
   scopedTopicKey,
 } from '@/lib/server/cache';
-import { generateChart } from '@/lib/ziwei/algorithm';
+import { generateChart, type GenerateChartOptions } from '@/lib/ziwei/algorithm';
+import {
+  DEFAULT_LEAP_MONTH,
+  isValidBrightnessSchoolOption,
+  isValidLeapMonthPolicy,
+  type BrightnessSchoolOption,
+  type LeapMonth,
+} from '@/lib/ziwei/school-config';
 import {
   analyzeChartSummary,
   getChartCacheKey,
@@ -136,6 +143,63 @@ function parseLateZishi(raw: unknown): ParseResult<LateZishiRule> {
     return { ok: true, value: raw };
   }
   return { ok: false, message: "lateZishi must be 'next-day' or 'current-day'" };
+}
+
+function parseOptionalBrightnessSchool(raw: unknown): ParseResult<BrightnessSchoolOption | undefined> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: undefined };
+  }
+  if (!isValidBrightnessSchoolOption(raw)) {
+    return {
+      ok: false,
+      message: "brightnessSchool must be one of 'default', 'QS', 'XD1', 'ZZ', or 'XD2'",
+    };
+  }
+  return { ok: true, value: raw };
+}
+
+function parseOptionalLeapMonthPolicy(raw: unknown): ParseResult<LeapMonth | undefined> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: undefined };
+  }
+  if (!isValidLeapMonthPolicy(raw)) {
+    return {
+      ok: false,
+      message: "leapMonthPolicy must be one of 'split', 'next-month', 'prev-month', or 'origin-month'",
+    };
+  }
+  return { ok: true, value: raw };
+}
+
+function parseOptionalReferenceDate(raw: unknown): ParseResult<string | undefined> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: undefined };
+  }
+  if (typeof raw !== 'string') {
+    return { ok: false, message: "referenceDate must be a 'YYYY-MM-DD' date string" };
+  }
+  const trimmed = raw.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (!match) {
+    return { ok: false, message: "referenceDate must match 'YYYY-MM-DD'" };
+  }
+  const ry = Number(match[1]);
+  const rm = Number(match[2]);
+  const rd = Number(match[3]);
+  if (!isValidGregorianDate(ry, rm, rd)) {
+    return { ok: false, message: `Invalid Gregorian referenceDate: ${trimmed}` };
+  }
+  return { ok: true, value: trimmed };
+}
+
+function parseOptionalReferenceYear(raw: unknown): ParseResult<number | undefined> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: undefined };
+  }
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 100 || raw > 9999) {
+    return { ok: false, message: 'referenceYear must be an integer between 100 and 9999' };
+  }
+  return { ok: true, value: raw };
 }
 
 function resolveCityLocation(
@@ -447,7 +511,18 @@ function parseChartObject(raw: unknown, lang: SupportedLang): ParseResult<ZiweiC
   if (!Array.isArray(raw.daXians)) {
     return { ok: false, message: 'chart.daXians must be an array' };
   }
+  if (raw.brightnessSchool !== undefined && !isValidBrightnessSchoolOption(raw.brightnessSchool)) {
+    return { ok: false, message: 'chart.brightnessSchool has an invalid school value' };
+  }
+  if (raw.leapMonthPolicy !== undefined && !isValidLeapMonthPolicy(raw.leapMonthPolicy)) {
+    return { ok: false, message: 'chart.leapMonthPolicy has an invalid policy value' };
+  }
   return { ok: true, value: raw as unknown as ZiweiChart };
+}
+
+function normalizeSchoolCompare(school?: BrightnessSchoolOption): 'QS' | 'XD1' | 'ZZ' | 'XD2' {
+  if (!school || school === 'default') return 'QS';
+  return school;
 }
 
 function resolveChartInput(
@@ -457,16 +532,35 @@ function resolveChartInput(
   lateZishi: LateZishiRule,
   lang: SupportedLang,
   fallbackZone: ParsedTzAlias = {},
+  genOpts: GenerateChartOptions = {},
 ): ParseResult<ZiweiChart> {
   if (chartRaw !== undefined) {
-    return parseChartObject(chartRaw, lang);
+    const parsedChart = parseChartObject(chartRaw, lang);
+    if (!parsedChart.ok) return parsedChart;
+    if (
+      genOpts.brightnessSchool !== undefined &&
+      parsedChart.value.brightnessSchool !== undefined &&
+      normalizeSchoolCompare(parsedChart.value.brightnessSchool) !== normalizeSchoolCompare(genOpts.brightnessSchool)
+    ) {
+      return {
+        ok: false,
+        message: `chart.brightnessSchool (${parsedChart.value.brightnessSchool}) does not match requested brightnessSchool (${genOpts.brightnessSchool})`,
+      };
+    }
+    return parsedChart;
   }
+  const effectiveOpts: GenerateChartOptions = {
+    brightnessSchool: genOpts.brightnessSchool ?? 'default',
+    leapMonth: genOpts.leapMonth ?? DEFAULT_LEAP_MONTH,
+    ...(genOpts.referenceYear !== undefined ? { referenceYear: genOpts.referenceYear } : {}),
+    ...(genOpts.referenceDate !== undefined ? { referenceDate: genOpts.referenceDate } : {}),
+  };
   if (formRaw !== undefined) {
     const parsedForm = parseBirthForm(formRaw, lang, fallbackZone);
     if (!parsedForm.ok) return parsedForm;
     try {
       const info = formToBirthInfo(parsedForm.value, lateZishi);
-      return { ok: true, value: generateChart(info) };
+      return { ok: true, value: generateChart(info, effectiveOpts) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Invalid birth form input';
       return { ok: false, message: msg };
@@ -476,7 +570,7 @@ function resolveChartInput(
     const parsedInfo = parseBirthInfo(birthInfoRaw, lang, fallbackZone);
     if (!parsedInfo.ok) return parsedInfo;
     try {
-      return { ok: true, value: generateChart(parsedInfo.value) };
+      return { ok: true, value: generateChart(parsedInfo.value, effectiveOpts) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Invalid birthInfo input';
       return { ok: false, message: msg };
@@ -533,10 +627,32 @@ export async function POST(req: Request): Promise<Response> {
   if (!lateZishiParsed.ok) {
     return jsonError(req, 400, 'invalid_late_zishi', 'INVALID_INPUT', lateZishiParsed.message);
   }
+  const brightnessSchoolParsed = parseOptionalBrightnessSchool(rawBody.brightnessSchool);
+  if (!brightnessSchoolParsed.ok) {
+    return jsonError(req, 400, 'invalid_brightness_school', 'INVALID_INPUT', brightnessSchoolParsed.message);
+  }
+  const leapMonthParsed = parseOptionalLeapMonthPolicy(rawBody.leapMonthPolicy);
+  if (!leapMonthParsed.ok) {
+    return jsonError(req, 400, 'invalid_leap_month_policy', 'INVALID_INPUT', leapMonthParsed.message);
+  }
+  const refDateParsed = parseOptionalReferenceDate(rawBody.referenceDate);
+  if (!refDateParsed.ok) {
+    return jsonError(req, 400, 'invalid_reference_date', 'INVALID_INPUT', refDateParsed.message);
+  }
+  const refYearParsed = parseOptionalReferenceYear(rawBody.referenceYear);
+  if (!refYearParsed.ok) {
+    return jsonError(req, 400, 'invalid_reference_year', 'INVALID_INPUT', refYearParsed.message);
+  }
 
   const lang = langParsed.value;
   const targetYear = targetYearParsed.value;
   const lateZishi = lateZishiParsed.value;
+  const genOpts: GenerateChartOptions = {
+    brightnessSchool: brightnessSchoolParsed.value ?? 'default',
+    leapMonth: leapMonthParsed.value ?? DEFAULT_LEAP_MONTH,
+    ...(refDateParsed.value !== undefined ? { referenceDate: refDateParsed.value } : {}),
+    ...(refYearParsed.value !== undefined ? { referenceYear: refYearParsed.value } : {}),
+  };
 
   const hasSynastryFields =
     rawBody.chartA !== undefined ||
@@ -554,6 +670,7 @@ export async function POST(req: Request): Promise<Response> {
       lateZishi,
       lang,
       fallbackZone,
+      genOpts,
     );
     if (!resolvedA.ok) {
       return jsonError(req, 400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner A: ${resolvedA.message}`);
@@ -565,6 +682,7 @@ export async function POST(req: Request): Promise<Response> {
       lateZishi,
       lang,
       fallbackZone,
+      genOpts,
     );
     if (!resolvedB.ok) {
       return jsonError(req, 400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner B: ${resolvedB.message}`);
@@ -589,6 +707,8 @@ export async function POST(req: Request): Promise<Response> {
           ok: true,
           mode: 'synastry',
           lang,
+          brightnessSchool: chartA.brightnessSchool ?? normalizeSchoolCompare(genOpts.brightnessSchool),
+          leapMonthPolicy: chartA.leapMonthPolicy ?? (genOpts.leapMonth ?? DEFAULT_LEAP_MONTH),
           pairKey,
           entitlementKey,
           chartA,
@@ -619,6 +739,7 @@ export async function POST(req: Request): Promise<Response> {
     lateZishi,
     lang,
     fallbackZone,
+    genOpts,
   );
   if (!resolvedNatal.ok) {
     return jsonError(req, 400, 'invalid_birth_input', 'INVALID_INPUT', resolvedNatal.message);
@@ -649,6 +770,8 @@ export async function POST(req: Request): Promise<Response> {
         ok: true,
         mode: 'natal',
         lang,
+        brightnessSchool: chart.brightnessSchool ?? normalizeSchoolCompare(genOpts.brightnessSchool),
+        leapMonthPolicy: chart.leapMonthPolicy ?? (genOpts.leapMonth ?? DEFAULT_LEAP_MONTH),
         cacheKey,
         entitlementKey,
         chart,

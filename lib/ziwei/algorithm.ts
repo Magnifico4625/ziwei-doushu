@@ -115,8 +115,74 @@ export type SchoolBrightnessKind = 'default' | BrightnessSchool;
 //   现代修订亮度表（第二版）的机器，不是默认口径。流派切换只改此值（同步主辅煞，避免不一致）。
 let currentBrightSchool: BrightnessSchool = 'QS';
 
+function normalizeBrightnessSchoolInput(school: SchoolBrightnessKind): BrightnessSchool {
+  if (school === 'default' || school === 'QS') return 'QS';
+  if (school === 'XD1' || school === 'ZZ' || school === 'XD2') return school;
+  throw new RangeError(`invalid brightnessSchool: ${String(school)}`);
+}
+
 export function setBrightnessSchool(school: SchoolBrightnessKind): void {
-  currentBrightSchool = school === 'default' ? 'QS' : school;
+  currentBrightSchool = normalizeBrightnessSchoolInput(school);
+}
+
+export interface GenerateChartOptions {
+  leapMonth?: LunarMonthPolicy;
+  brightnessSchool?: SchoolBrightnessKind;
+  referenceYear?: number;
+  referenceDate?: Date | string;
+}
+
+export const DATASET_BRIGHTNESS_SCHOOL: BrightnessSchool = 'XD2';
+export const DATASET_LEAP_MONTH_POLICY: LunarMonthPolicy = DEFAULT_LEAP_MONTH;
+
+/**
+ * Convenience helper for the v4 dataset workflow: explicitly locks calculation
+ * to XD2 brightness and `split` leap-month handling per call without mutating
+ * the global `setBrightnessSchool` state.
+ */
+export function generateDatasetChart(
+  birthInfo: BirthInfo,
+  opts?: Omit<GenerateChartOptions, 'brightnessSchool' | 'leapMonth'> & {
+    leapMonth?: LunarMonthPolicy;
+  },
+): ZiweiChart {
+  return generateChart(birthInfo, {
+    ...opts,
+    brightnessSchool: DATASET_BRIGHTNESS_SCHOOL,
+    leapMonth: opts?.leapMonth ?? DATASET_LEAP_MONTH_POLICY,
+  });
+}
+
+function resolveHoroscopeReferenceDate(opts?: GenerateChartOptions): Date | undefined {
+  if (opts?.referenceDate !== undefined) {
+    if (opts.referenceDate instanceof Date) {
+      if (Number.isNaN(opts.referenceDate.getTime())) {
+        throw new RangeError('invalid referenceDate');
+      }
+      return opts.referenceDate;
+    }
+    if (typeof opts.referenceDate === 'string') {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(opts.referenceDate.trim());
+      if (!match) {
+        throw new RangeError(`invalid referenceDate: ${opts.referenceDate}`);
+      }
+      const ry = Number(match[1]);
+      const rm = Number(match[2]);
+      const rd = Number(match[3]);
+      if (!isValidGregorianDate(ry, rm, rd)) {
+        throw new RangeError(`nonexistent referenceDate: ${opts.referenceDate}`);
+      }
+      return new Date(ry, rm - 1, rd, 12, 0, 0);
+    }
+    throw new RangeError('invalid referenceDate');
+  }
+  if (opts?.referenceYear !== undefined) {
+    if (!Number.isInteger(opts.referenceYear) || opts.referenceYear < 100 || opts.referenceYear > 9999) {
+      throw new RangeError(`invalid referenceYear: ${String(opts.referenceYear)}`);
+    }
+    return new Date(opts.referenceYear, 5, 15, 12, 0, 0);
+  }
+  return undefined;
 }
 
 export type LunarMonthPolicy = 'split' | 'next-month' | 'prev-month' | 'origin-month';
@@ -341,7 +407,12 @@ function parseWuxingJu(name: string): number {
 //    既定排法,此处遵用户「对齐默认口径」决定。其余 9 个天干年默认口径与 iztro 本就一致。
 // 回退:删除 generateChart 内 applySchoolKuiyue(...) 调用即恢复 iztro 主流派。
 // ─────────────────────────────────────────────────────────────────────────
-function relocateStar(palaces: Palace[], name: string, targetBranch: number): void {
+function relocateStar(
+  palaces: Palace[],
+  name: string,
+  targetBranch: number,
+  brightnessSchool: BrightnessSchool,
+): void {
   let moved: Star | undefined;
   for (const p of palaces) {
     const i = p.stars.findIndex((s) => s.name === name);
@@ -357,19 +428,23 @@ function relocateStar(palaces: Palace[], name: string, targetBranch: number): vo
   if (target) {
     target.stars.push(moved);
     // ★ 2026-06-20 天魁天钺换位（默认派 KY1）后,亮度仍是 iztro 旧宫位算的（错位）。按新宫地支重算亮度。
-    const rb = schoolStarBrightness(moved.name, targetBranch, currentBrightSchool);
+    const rb = schoolStarBrightness(moved.name, targetBranch, brightnessSchool);
     moved.brightnessRaw = extractRawBrightness(rb);
     moved.brightness = rb ? mapBrightness(rb) : undefined;
   }
 }
 
-function applySchoolKuiyue(palaces: Palace[], yearStemCn: string): void {
+function applySchoolKuiyue(
+  palaces: Palace[],
+  yearStemCn: string,
+  brightnessSchool: BrightnessSchool,
+): void {
   const gan = STEMS.indexOf(yearStemCn); // 甲=0 … 癸=9
   if (gan < 0) return;
   const row = SCHOOL_AX.KY_ARR1[gan + 1]; // KY 表「甲=1」起;子起一编码
   if (!row) return;
-  relocateStar(palaces, '天魁', row[0] - 1); // 子起一(子=1) → BRANCHES 索引(子=0)
-  relocateStar(palaces, '天钺', row[1] - 1);
+  relocateStar(palaces, '天魁', row[0] - 1, brightnessSchool); // 子起一(子=1) → BRANCHES 索引(子=0)
+  relocateStar(palaces, '天钺', row[1] - 1, brightnessSchool);
 }
 
 /**
@@ -382,10 +457,15 @@ export function schoolDahaoBranch(yearBranch: number): number {
   return yearBranch % 2 === 0 ? (suiPo + 1) % 12 : (suiPo + 11) % 12;
 }
 
-function pushNatalStar(palaces: Palace[], branch: number, name: string): void {
+function pushNatalStar(
+  palaces: Palace[],
+  branch: number,
+  name: string,
+  brightnessSchool: BrightnessSchool,
+): void {
   const target = palaces.find((p) => p.branch === branch);
   if (!target || target.stars.some((s) => s.name === name)) return;
-  const rb = schoolStarBrightness(name, branch, currentBrightSchool);
+  const rb = schoolStarBrightness(name, branch, brightnessSchool);
   target.stars.push({
     name,
     type: mapStarType(name, ''),
@@ -394,8 +474,12 @@ function pushNatalStar(palaces: Palace[], branch: number, name: string): void {
   });
 }
 
-function applySchoolDahao(palaces: Palace[], yearBranch: number): void {
-  pushNatalStar(palaces, schoolDahaoBranch(yearBranch), '大耗');
+function applySchoolDahao(
+  palaces: Palace[],
+  yearBranch: number,
+  brightnessSchool: BrightnessSchool,
+): void {
+  pushNatalStar(palaces, schoolDahaoBranch(yearBranch), '大耗', brightnessSchool);
 }
 
 /**
@@ -404,7 +488,11 @@ function applySchoolDahao(palaces: Palace[], yearBranch: number): void {
  * 阳干截空落阳宫、副截落阴宫；阴干对调。iztro 一律截路=阳宫、空亡=阴宫，阴干要换宫。
  * 2026-08-14 金标准盘：辛丑巳截空/辰副截，己亥酉截空/申副截，乙巳未截空/午副截。
  */
-function applySchoolJiekong(palaces: Palace[], yearStem: number): void {
+function applySchoolJiekong(
+  palaces: Palace[],
+  yearStem: number,
+  brightnessSchool: BrightnessSchool,
+): void {
   for (const p of palaces) {
     for (const s of p.stars) {
       if (s.name === '截路') s.name = '截空';
@@ -412,7 +500,7 @@ function applySchoolJiekong(palaces: Palace[], yearStem: number): void {
       else continue;
       // ★ 2026-10-20 改名后按新名字补亮度：iztro 原名查不到亮度，阳干年（不换宫、下面直接 return）
       //   截空 / 副截一直留白，主流排盘默认口径是有亮度的（真盘：丙寅 辰截空=陷、巳副截=庙）。阴干换宫后下面再按新宫重算。
-      const rb = schoolStarBrightness(s.name, p.branch, currentBrightSchool);
+      const rb = schoolStarBrightness(s.name, p.branch, brightnessSchool);
       s.brightness = rb ? mapBrightness(rb) : undefined;
       s.brightnessRaw = extractRawBrightness(rb);
     }
@@ -426,8 +514,8 @@ function applySchoolJiekong(palaces: Palace[], yearStem: number): void {
   if (!jieStar || !fuStar) return;
   jie.stars = jie.stars.filter((s) => s !== jieStar);
   fu.stars = fu.stars.filter((s) => s !== fuStar);
-  const rbJ = schoolStarBrightness('截空', fu.branch, currentBrightSchool);
-  const rbF = schoolStarBrightness('副截', jie.branch, currentBrightSchool);
+  const rbJ = schoolStarBrightness('截空', fu.branch, brightnessSchool);
+  const rbF = schoolStarBrightness('副截', jie.branch, brightnessSchool);
   jieStar.brightness = rbJ ? mapBrightness(rbJ) : undefined;
   jieStar.brightnessRaw = extractRawBrightness(rbJ);
   fuStar.brightness = rbF ? mapBrightness(rbF) : undefined;
@@ -437,17 +525,24 @@ function applySchoolJiekong(palaces: Palace[], yearStem: number): void {
 }
 
 /** 旬空成对（子丑/寅卯/辰巳/午未/申酉/戌亥）。副旬落在另一支：旬空阳支+1、阴支−1。 */
-function applySchoolFuxun(palaces: Palace[]): void {
+function applySchoolFuxun(
+  palaces: Palace[],
+  brightnessSchool: BrightnessSchool,
+): void {
   const xun = palaces.find((p) => p.stars.some((s) => s.name === '旬空'));
   if (!xun) return;
   const fu = xun.branch % 2 === 0 ? (xun.branch + 1) % 12 : (xun.branch + 11) % 12;
-  pushNatalStar(palaces, fu, '副旬');
+  pushNatalStar(palaces, fu, '副旬', brightnessSchool);
 }
 
 export function generateChart(
   birthInfo: BirthInfo,
-  opts?: { leapMonth?: LunarMonthPolicy },
+  opts?: GenerateChartOptions,
 ): ZiweiChart {
+  const brightnessSchool = opts?.brightnessSchool !== undefined
+    ? normalizeBrightnessSchoolInput(opts.brightnessSchool)
+    : currentBrightSchool;
+  const refDate = resolveHoroscopeReferenceDate(opts);
   const { year, month, day, hour, gender } = birthInfo;
   if (!Number.isInteger(hour) || hour < 0 || hour > 11) {
     throw new RangeError(`hour must be an integer branch index from 0 to 11; received ${hour}`);
@@ -514,8 +609,8 @@ export function generateChart(
     const allStars: Star[] = [
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...(p.majorStars ?? []).map((s: any) => {
-        // ★ 2026-06-20 全套对齐主流排盘口径:亮度统一查 SB_[currentBrightSchool] 表(全书派默认),不再用 iztro/善本表
-        const rb = schoolStarBrightness(s.name as string, branch, currentBrightSchool);
+        // ★ 2026-06-20 全套对齐主流排盘口径:亮度统一查 SB_[brightnessSchool] 表(全书派默认),不再用 iztro/善本表
+        const rb = schoolStarBrightness(s.name as string, branch, brightnessSchool);
         return {
           name:          s.name as string,
           type:          'major' as const,
@@ -527,7 +622,7 @@ export function generateChart(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...(p.minorStars ?? []).map((s: any) => {
         // ★ 2026-06-20 辅星(左辅右弼天魁天钺禄存天马) + 煞星(火铃羊陀空劫) 同走 SB 表(同一套映射/索引)
-        const rb = schoolStarBrightness(s.name as string, branch, currentBrightSchool);
+        const rb = schoolStarBrightness(s.name as string, branch, brightnessSchool);
         return {
           name:          s.name as string,
           type:          mapStarType(s.name as string, s.type as string),
@@ -543,7 +638,7 @@ export function generateChart(
       ...(p.adjectiveStars ?? []).map((s: any) => {
         // ★ 2026-06-20 杂耀亮度对齐主流排盘口径：行号 = SB 亮度表 ID（SCHOOL_STAR_ID_TO_NAME 反查），
         //   落宫沿用 iztro（与金标准盘一致），金标准盘 24/24 验证。名字不在表里的杂耀 → undefined（留白，同现状）。
-        const rb = schoolStarBrightness(s.name as string, branch, currentBrightSchool);
+        const rb = schoolStarBrightness(s.name as string, branch, brightnessSchool);
         return {
           name:          s.name as string,
           type:          mapStarType(s.name as string, (s.type as string) ?? ''),
@@ -579,7 +674,7 @@ export function generateChart(
 
   // ★ 天魁天钺对齐默认派(KY1)——用户决策 2026-05-30,实测仅辛年与现状不同(见上方函数注释)
   const yearStemCn = (astrolabe.rawDates?.chineseDate?.yearly?.[0]) as string | undefined;
-  if (yearStemCn) applySchoolKuiyue(palaces, yearStemCn);
+  if (yearStemCn) applySchoolKuiyue(palaces, yearStemCn, brightnessSchool);
 
   // ── 当前年龄 & 大限 ──
   // ★ 用 iztro horoscope.age.nominalAge（中国虚岁口径，与 daXianAge 范围一致）
@@ -587,11 +682,12 @@ export function generateChart(
   // "大限没走对，似乎还在走上一个大限"。统一用 iztro 自身口径修复。
   let currentAge: number;
   try {
-    const horo = (astrolabe as unknown as { horoscope: () => { age: { nominalAge: number } } }).horoscope();
+    const horo = (astrolabe as unknown as { horoscope: (dt?: Date) => { age: { nominalAge: number } } }).horoscope(refDate);
     currentAge = horo.age.nominalAge;
   } catch {
     // fallback：iztro 接口异常时回退到虚岁推导
-    currentAge = new Date().getFullYear() - year + 1;
+    const refYear = refDate ? refDate.getFullYear() : new Date().getFullYear();
+    currentAge = refYear - year + 1;
   }
 
   palaces.forEach(p => {
@@ -647,9 +743,9 @@ export function generateChart(
   const lunarInfo = getLunarInfo(year, month, day, hour, leapMode);
 
   // ★ 2026-08-14 金标准盘核对：截空/副截阴干对调 + 年支大耗 + 旬空成对副旬
-  applySchoolJiekong(palaces, lunarInfo.yearStem);
-  applySchoolDahao(palaces, lunarInfo.yearBranch);
-  applySchoolFuxun(palaces);
+  applySchoolJiekong(palaces, lunarInfo.yearStem, brightnessSchool);
+  applySchoolDahao(palaces, lunarInfo.yearBranch, brightnessSchool);
+  applySchoolFuxun(palaces, brightnessSchool);
 
   // ── 命主 / 身主 / 阴阳性别 ──
   const mingZhu = calcMingZhu(mingGongBranch >= 0 ? mingGongBranch : 0);
@@ -668,6 +764,8 @@ export function generateChart(
     daXians,
     currentAge,
     currentDaXianIndex,
+    brightnessSchool,
+    leapMonthPolicy: leapMode,
     mingZhu,
     shenZhu,
     yinYangGender,

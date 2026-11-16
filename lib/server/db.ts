@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
-import { stripYearSuffixFromKey } from '../ziwei/chart-analyzer';
+import { normalizeEntitlementKey } from '../ziwei/chart-analyzer';
 import { getServerConfig } from './env';
 import type { EntitlementScope } from './access-token';
 
@@ -200,7 +200,7 @@ function isEntitlementMatch(
 ): boolean {
   if (
     order.status !== 'paid' ||
-    stripYearSuffixFromKey(order.targetKey) !== stripYearSuffixFromKey(targetKey)
+    normalizeEntitlementKey(order.targetKey) !== normalizeEntitlementKey(targetKey)
   ) {
     return false;
   }
@@ -830,7 +830,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
     }
 
     const scopes = [...matchingScopesFor(scope)];
-    const normalizedTarget = stripYearSuffixFromKey(targetKey);
+    const normalizedTarget = normalizeEntitlementKey(targetKey);
     const result = await this.pool.query<{ ok: number }>(
       `SELECT 1 AS ok
        FROM orders
@@ -838,10 +838,11 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
          AND status = 'paid'
          AND (
            target_key = $2
-           OR (
-             target_key ~ '^(ziwei|heming):v[0-9]+:.*:y[0-9]+$'
-             AND regexp_replace(target_key, ':y[0-9]+$', '') = $3
-           )
+           OR regexp_replace(
+             regexp_replace(target_key, ':y[0-9]+$', ''),
+             '^(ziwei:v[0-9]+:[^:]+:[0-9]+:(male|female)):(default|QS|XD1|ZZ|XD2):([^:]+)$',
+             '\\1:default:\\4'
+           ) = $3
          )
        LIMIT 1`,
       [scopes, targetKey, normalizedTarget],

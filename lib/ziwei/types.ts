@@ -129,6 +129,10 @@ export interface ZiweiChart {
   daXians: DaXian[];
   currentAge: number;
   currentDaXianIndex: number;
+  /** 实际排盘采用的亮度流派 */
+  brightnessSchool?: 'QS' | 'XD1' | 'ZZ' | 'XD2';
+  /** 实际排盘采用的闰月策略 */
+  leapMonthPolicy?: 'split' | 'next-month' | 'prev-month' | 'origin-month';
   /** Signed analysis-cache eligibility marker assigned by /api/generate. */
   analysisCacheProfile?: string;
   /** 命主星（按命宫地支查表） */

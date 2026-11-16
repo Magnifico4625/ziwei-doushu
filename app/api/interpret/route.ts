@@ -40,6 +40,7 @@ import {
 import { isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { normalizeLang, type SupportedLang } from '@/lib/ziwei/i18n';
 import { detectPatterns } from '@/lib/ziwei/patterns';
+import { isValidBrightnessSchoolOption, isValidLeapMonthPolicy } from '@/lib/ziwei/school-config';
 import type { ZiweiChart } from '@/lib/ziwei/types';
 
 export const runtime = 'nodejs';
@@ -198,6 +199,12 @@ function parseChart(raw: unknown): ParseResult<ZiweiChart> {
   }
   if (!Array.isArray(raw.daXians)) {
     return { ok: false, message: 'chart.daXians must be an array' };
+  }
+  if (raw.brightnessSchool !== undefined && !isValidBrightnessSchoolOption(raw.brightnessSchool)) {
+    return { ok: false, message: 'chart.brightnessSchool has an invalid school value' };
+  }
+  if (raw.leapMonthPolicy !== undefined && !isValidLeapMonthPolicy(raw.leapMonthPolicy)) {
+    return { ok: false, message: 'chart.leapMonthPolicy has an invalid policy value' };
   }
   return { ok: true, value: raw as unknown as ZiweiChart };
 }
