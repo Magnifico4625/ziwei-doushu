@@ -6,6 +6,8 @@ import {
 } from '@/lib/server/access-token';
 import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { recordWebhookOrderIfNew } from '@/lib/server/db';
+import { MAX_BILLING_BODY_BYTES, readTextBodyWithLimit } from '@/lib/server/request-body';
+import { stripYearSuffixFromKey } from '@/lib/ziwei/chart-analyzer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,7 +62,11 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const rawBody = await req.text();
+  const bodyResult = await readTextBodyWithLimit(req, MAX_BILLING_BODY_BYTES);
+  if (!bodyResult.ok) {
+    return jsonError(req, bodyResult.status, bodyResult.error, bodyResult.code, bodyResult.message);
+  }
+  const rawBody = bodyResult.value;
   const signatureHeader =
     req.headers.get('x-webhook-signature')?.trim() ||
     req.headers.get('x-signature')?.trim() ||
@@ -83,11 +89,11 @@ export async function POST(req: Request): Promise<Response> {
 
   const eventId = nonEmptyString(parsedBody.eventId);
   const orderId = nonEmptyString(parsedBody.orderId);
-  const targetKey = nonEmptyString(parsedBody.targetKey);
+  const rawTargetKey = nonEmptyString(parsedBody.targetKey);
   const status = nonEmptyString(parsedBody.status);
   const scope = parsedBody.scope;
 
-  if (!eventId || !orderId || !targetKey || !status || !isEntitlementScope(scope)) {
+  if (!eventId || !orderId || !rawTargetKey || !status || !isEntitlementScope(scope)) {
     return jsonError(
       req,
       400,
@@ -96,15 +102,16 @@ export async function POST(req: Request): Promise<Response> {
       'Required fields: eventId, orderId, scope (interpret|heming|bundle), targetKey, status.',
     );
   }
+  const targetKey = stripYearSuffixFromKey(rawTargetKey);
 
   let amountMinor: number | undefined;
   if (parsedBody.amountMinor !== undefined && parsedBody.amountMinor !== null) {
     if (
       typeof parsedBody.amountMinor !== 'number' ||
       !Number.isInteger(parsedBody.amountMinor) ||
-      parsedBody.amountMinor < 0
+      parsedBody.amountMinor <= 0
     ) {
-      return jsonError(req, 400, 'invalid_amount', 'INVALID_INPUT', 'amountMinor must be a non-negative integer.');
+      return jsonError(req, 400, 'invalid_amount', 'INVALID_INPUT', 'amountMinor must be a positive integer.');
     }
     amountMinor = parsedBody.amountMinor;
   }

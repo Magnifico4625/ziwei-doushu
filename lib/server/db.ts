@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
+import { stripYearSuffixFromKey } from '../ziwei/chart-analyzer';
 import { getServerConfig } from './env';
 import type { EntitlementScope } from './access-token';
 
@@ -12,6 +13,7 @@ export interface StoredOrder {
   currency?: string;
   provider?: string;
   checkoutUrl?: string;
+  claimTokenHash?: string;
   meta?: Record<string, unknown>;
   createdAt: Date;
   paidAt?: Date;
@@ -28,6 +30,7 @@ export interface CreatePendingOrderInput {
   currency?: string;
   provider?: string;
   checkoutUrl?: string;
+  claimTokenHash?: string;
   meta?: Record<string, unknown>;
 }
 
@@ -66,6 +69,7 @@ export interface RecordWebhookOrderInput {
   currency?: string;
   provider?: string;
   checkoutUrl?: string;
+  claimTokenHash?: string;
   meta?: Record<string, unknown>;
 }
 
@@ -119,6 +123,7 @@ interface OrderRow extends QueryResultRow {
   currency: string | null;
   provider: string | null;
   checkout_url: string | null;
+  claim_token_hash: string | null;
   meta: unknown;
   created_at: Date | string;
   paid_at: Date | string | null;
@@ -193,7 +198,10 @@ function isEntitlementMatch(
   requestedScope: EntitlementScope,
   targetKey: string,
 ): boolean {
-  if (order.status !== 'paid' || order.targetKey !== targetKey) {
+  if (
+    order.status !== 'paid' ||
+    stripYearSuffixFromKey(order.targetKey) !== stripYearSuffixFromKey(targetKey)
+  ) {
     return false;
   }
   return matchingScopesFor(requestedScope).includes(order.scope);
@@ -209,6 +217,7 @@ function cloneOrder(order: StoredOrder): StoredOrder {
     ...(order.currency !== undefined ? { currency: order.currency } : {}),
     ...(order.provider !== undefined ? { provider: order.provider } : {}),
     ...(order.checkoutUrl !== undefined ? { checkoutUrl: order.checkoutUrl } : {}),
+    ...(order.claimTokenHash !== undefined ? { claimTokenHash: order.claimTokenHash } : {}),
     ...(order.meta !== undefined ? { meta: cloneMeta(order.meta) } : {}),
     createdAt: new Date(order.createdAt.getTime()),
     ...(order.paidAt !== undefined ? { paidAt: new Date(order.paidAt.getTime()) } : {}),
@@ -249,6 +258,7 @@ function mapOrderRow(row: OrderRow): StoredOrder {
     ...(row.currency !== null ? { currency: row.currency } : {}),
     ...(row.provider !== null ? { provider: row.provider } : {}),
     ...(row.checkout_url !== null ? { checkoutUrl: row.checkout_url } : {}),
+    ...(row.claim_token_hash !== null ? { claimTokenHash: row.claim_token_hash } : {}),
     ...(meta !== undefined ? { meta } : {}),
     createdAt: toDate(row.created_at),
     ...(row.paid_at !== null ? { paidAt: toDate(row.paid_at) } : {}),
@@ -298,9 +308,9 @@ function validateCreatePendingOrderInput(input: CreatePendingOrderInput): {
   }
   if (
     input.amountMinor !== undefined &&
-    (!Number.isInteger(input.amountMinor) || input.amountMinor < 0)
+    (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0)
   ) {
-    throw new Error('amountMinor must be a non-negative integer');
+    throw new Error('amountMinor must be a positive integer');
   }
   return {
     orderId: input.orderId?.trim() || generateOrderId(),
@@ -320,6 +330,12 @@ function validateRecordWebhookInput(input: RecordWebhookOrderInput): void {
   }
   if (!isEntitlementScope(input.scope)) {
     throw new Error(`Invalid entitlement scope: ${String(input.scope)}`);
+  }
+  if (
+    input.amountMinor !== undefined &&
+    (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0)
+  ) {
+    throw new Error('amountMinor must be a positive integer');
   }
 }
 
@@ -360,6 +376,7 @@ export class InMemoryDbStore {
       ...(input.currency !== undefined ? { currency: input.currency } : {}),
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.checkoutUrl !== undefined ? { checkoutUrl: input.checkoutUrl } : {}),
+      ...(input.claimTokenHash !== undefined ? { claimTokenHash: input.claimTokenHash } : {}),
       ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
       createdAt: now,
       updatedAt: now,
@@ -442,6 +459,11 @@ export class InMemoryDbStore {
             : previousOrder.checkoutUrl !== undefined
               ? { checkoutUrl: previousOrder.checkoutUrl }
               : {}),
+          ...(previousOrder.claimTokenHash !== undefined
+            ? { claimTokenHash: previousOrder.claimTokenHash }
+            : input.claimTokenHash !== undefined
+              ? { claimTokenHash: input.claimTokenHash }
+              : {}),
           ...(input.meta !== undefined
             ? { meta: cloneMeta(input.meta) }
             : previousOrder.meta !== undefined
@@ -464,6 +486,7 @@ export class InMemoryDbStore {
           ...(input.currency !== undefined ? { currency: input.currency } : {}),
           ...(input.provider !== undefined ? { provider: input.provider } : {}),
           ...(input.checkoutUrl !== undefined ? { checkoutUrl: input.checkoutUrl } : {}),
+          ...(input.claimTokenHash !== undefined ? { claimTokenHash: input.claimTokenHash } : {}),
           ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
           createdAt: now,
           ...(nextPaidAt !== undefined ? { paidAt: nextPaidAt } : {}),
@@ -625,12 +648,12 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
       const inserted = await client.query<OrderRow>(
         `INSERT INTO orders (
            order_id, scope, target_key, status, amount_minor,
-           currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+           currency, provider, checkout_url, claim_token_hash, meta, created_at, paid_at, updated_at
          )
-         VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8::jsonb, NOW(), NULL, NOW())
+         VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8, $9::jsonb, NOW(), NULL, NOW())
          ON CONFLICT (order_id) DO NOTHING
          RETURNING order_id, scope, target_key, status, amount_minor,
-                   currency, provider, checkout_url, meta, created_at, paid_at, updated_at`,
+                   currency, provider, checkout_url, claim_token_hash, meta, created_at, paid_at, updated_at`,
         [
           orderId,
           input.scope,
@@ -639,6 +662,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
           input.currency ?? null,
           input.provider ?? null,
           input.checkoutUrl ?? null,
+          input.claimTokenHash ?? null,
           serializedMeta,
         ],
       );
@@ -649,7 +673,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
 
       const existingRes = await client.query<OrderRow>(
         `SELECT order_id, scope, target_key, status, amount_minor,
-                currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+                currency, provider, checkout_url, claim_token_hash, meta, created_at, paid_at, updated_at
          FROM orders
          WHERE order_id = $1
          LIMIT 1`,
@@ -675,7 +699,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
 
     const result = await this.pool.query<OrderRow>(
       `SELECT order_id, scope, target_key, status, amount_minor,
-              currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+              currency, provider, checkout_url, claim_token_hash, meta, created_at, paid_at, updated_at
        FROM orders
        WHERE order_id = $1
        LIMIT 1`,
@@ -705,7 +729,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
       if (eventInsert.rowCount === 0) {
         const existingOrderRes = await client.query<OrderRow>(
           `SELECT o.order_id, o.scope, o.target_key, o.status, o.amount_minor,
-                  o.currency, o.provider, o.checkout_url, o.meta, o.created_at, o.paid_at, o.updated_at
+                  o.currency, o.provider, o.checkout_url, o.claim_token_hash, o.meta, o.created_at, o.paid_at, o.updated_at
            FROM webhook_events w
            JOIN orders o ON o.order_id = w.order_id
            WHERE w.event_id = $1
@@ -718,7 +742,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
 
         const fallbackOrderRes = await client.query<OrderRow>(
           `SELECT order_id, scope, target_key, status, amount_minor,
-                  currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+                  currency, provider, checkout_url, claim_token_hash, meta, created_at, paid_at, updated_at
            FROM orders
            WHERE order_id = $1
            LIMIT 1`,
@@ -739,6 +763,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
             ...(input.currency !== undefined ? { currency: input.currency } : {}),
             ...(input.provider !== undefined ? { provider: input.provider } : {}),
             ...(input.checkoutUrl !== undefined ? { checkoutUrl: input.checkoutUrl } : {}),
+            ...(input.claimTokenHash !== undefined ? { claimTokenHash: input.claimTokenHash } : {}),
             ...(input.meta !== undefined ? { meta: cloneMeta(input.meta) } : {}),
             createdAt: new Date(),
             ...(paidAt ? { paidAt } : {}),
@@ -749,9 +774,9 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
       const orderUpsert = await client.query<OrderRow>(
         `INSERT INTO orders (
            order_id, scope, target_key, status, amount_minor,
-           currency, provider, checkout_url, meta, created_at, paid_at, updated_at
+           currency, provider, checkout_url, claim_token_hash, meta, created_at, paid_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), $10, NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW(), $11, NOW())
          ON CONFLICT (order_id) DO UPDATE SET
            scope = CASE WHEN orders.status = 'paid' THEN orders.scope ELSE EXCLUDED.scope END,
            target_key = CASE WHEN orders.status = 'paid' THEN orders.target_key ELSE EXCLUDED.target_key END,
@@ -760,11 +785,12 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
            currency = COALESCE(EXCLUDED.currency, orders.currency),
            provider = COALESCE(EXCLUDED.provider, orders.provider),
            checkout_url = COALESCE(EXCLUDED.checkout_url, orders.checkout_url),
+           claim_token_hash = COALESCE(orders.claim_token_hash, EXCLUDED.claim_token_hash),
            meta = COALESCE(EXCLUDED.meta, orders.meta),
            paid_at = COALESCE(orders.paid_at, EXCLUDED.paid_at),
            updated_at = NOW()
          RETURNING order_id, scope, target_key, status, amount_minor,
-                   currency, provider, checkout_url, meta, created_at, paid_at, updated_at`,
+                   currency, provider, checkout_url, claim_token_hash, meta, created_at, paid_at, updated_at`,
         [
           input.orderId,
           input.scope,
@@ -774,6 +800,7 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
           input.currency ?? null,
           input.provider ?? null,
           input.checkoutUrl ?? null,
+          input.claimTokenHash ?? null,
           serializedMeta,
           paidAt,
         ],
@@ -803,14 +830,21 @@ export class PostgresDatabaseAdapter implements DatabaseAdapter {
     }
 
     const scopes = [...matchingScopesFor(scope)];
+    const normalizedTarget = stripYearSuffixFromKey(targetKey);
     const result = await this.pool.query<{ ok: number }>(
       `SELECT 1 AS ok
        FROM orders
        WHERE scope = ANY($1::text[])
-         AND target_key = $2
          AND status = 'paid'
+         AND (
+           target_key = $2
+           OR (
+             target_key ~ '^(ziwei|heming):v[0-9]+:.*:y[0-9]+$'
+             AND regexp_replace(target_key, ':y[0-9]+$', '') = $3
+           )
+         )
        LIMIT 1`,
-      [scopes, targetKey],
+      [scopes, targetKey, normalizedTarget],
     );
     return (result.rowCount ?? 0) > 0;
   }

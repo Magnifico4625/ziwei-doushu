@@ -582,13 +582,26 @@ async function main(): Promise<void> {
           assert.equal(sse2.fullText, sse1.fullText);
           assert.equal(llmCallCount, 1);
 
-          // 3rd call: clear Redis cache & omit token (InsightPanel DB entitlement + PG cache HIT)
+          // 3rd call: clear Redis cache & omit token -> 402 PAYWALL_LOCKED even after payment in DB
           resetMemoryCacheForTests();
-          const res3 = await interpretPOST(
+          const noTokenRes = await interpretPOST(
             makeJsonRequest('http://localhost/api/interpret', {
               chart: chartA,
               messages,
             }),
+          );
+          assert.equal(noTokenRes.status, 402);
+
+          // With valid accessToken after Redis clear -> PG cache HIT, llmCallCount stays 1
+          const res3 = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret',
+              {
+                chart: chartA,
+                messages,
+              },
+              { Authorization: `Bearer ${interpretAccessToken}` },
+            ),
           );
           assert.equal(res3.status, 200);
           const sse3 = await readSseResponse(res3);

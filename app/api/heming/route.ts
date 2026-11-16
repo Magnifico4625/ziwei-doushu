@@ -6,13 +6,15 @@ import {
   extractClientIp,
   type RateLimitRedisClient,
 } from '@/lib/server/rate-limit';
+import { MAX_AI_BODY_BYTES, readJsonBodyWithLimit } from '@/lib/server/request-body';
+import { parseIanaTimeZoneField } from '@/lib/server/timezone-input';
 import {
   getSynastryInterpretation,
-  hasPaidEntitlement,
   saveSynastryInterpretation,
 } from '@/lib/server/db';
 import {
   buildSynastryRedisKey,
+  canonicalPairEntitlementKey,
   canonicalPairKey,
   getCachedStreamText,
   getRedisClient,
@@ -134,6 +136,14 @@ function parseChart(raw: unknown, label: string): ParseResult<ZiweiChart> {
   if (gender !== 'male' && gender !== 'female') {
     return { ok: false, message: `${label}.birthInfo.gender must be 'male' or 'female'` };
   }
+  const parsedTimeZone = parseIanaTimeZoneField(
+    raw.birthInfo.timeZone,
+    `${label}.birthInfo.timeZone`,
+    { allowEmptyString: false },
+  );
+  if (!parsedTimeZone.ok) {
+    return parsedTimeZone;
+  }
   if (!isPlainRecord(raw.lunarInfo)) {
     return { ok: false, message: `${label}.lunarInfo is required` };
   }
@@ -201,16 +211,11 @@ export async function OPTIONS(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  let rawBody: unknown;
-  try {
-    rawBody = await req.json();
-  } catch {
-    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
+  const bodyResult = await readJsonBodyWithLimit(req, MAX_AI_BODY_BYTES);
+  if (!bodyResult.ok) {
+    return jsonError(req, bodyResult.status, bodyResult.error, bodyResult.code, bodyResult.message);
   }
-
-  if (!isPlainRecord(rawBody)) {
-    return jsonError(req, 400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
-  }
+  const rawBody = bodyResult.value;
 
   const langParsed = parseLang(rawBody.lang);
   if (!langParsed.ok) {
@@ -250,6 +255,7 @@ export async function POST(req: Request): Promise<Response> {
       : undefined;
 
   const pairKey = canonicalPairKey(chartA, chartB, targetYear);
+  const entitlementKey = canonicalPairEntitlementKey(chartA, chartB);
   const synastry = analyzeSynastry(chartA, chartB, { targetYear });
 
   // Zero-LLM deterministic synastry preview with localized teasers & overview
@@ -262,6 +268,7 @@ export async function POST(req: Request): Promise<Response> {
           ok: true,
           lang,
           pairKey,
+          entitlementKey,
           synastry,
           overview: teasers.overview,
           teasers,
@@ -291,15 +298,12 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // Strict paywall guard BEFORE cache read or LLM invocation.
-  // Entitlement (`pairKey`) stays language-agnostic across UI language switches.
+  // Requires a valid signed accessToken bound to the year- & language-agnostic entitlementKey.
   if (cfg.aiPaywallMode === 'strict') {
     const token = extractBearerToken(req, rawBody.accessToken);
-    let authorized = false;
-    if (token !== null) {
-      authorized = verifyAccessToken(token, 'heming', pairKey, cfg.accessTokenSecret).valid;
-    } else {
-      authorized = await hasPaidEntitlement('heming', pairKey);
-    }
+    const authorized =
+      token !== null &&
+      verifyAccessToken(token, 'heming', entitlementKey, cfg.accessTokenSecret).valid;
 
     if (!authorized) {
       return withCors(
@@ -309,6 +313,7 @@ export async function POST(req: Request): Promise<Response> {
             error: 'payment_required',
             code: 'PAYWALL_LOCKED',
             pairKey,
+            entitlementKey,
           },
           { status: 402 },
         ),

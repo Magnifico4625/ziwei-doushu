@@ -2,7 +2,7 @@ import { getServerEnv } from './env';
 
 const CORS_ALLOW_METHODS = 'GET, POST, OPTIONS';
 const CORS_ALLOW_HEADERS =
-  'Content-Type, Authorization, X-Requested-With, X-Webhook-Signature, X-Signature';
+  'Content-Type, Authorization, X-Order-Token, X-Requested-With, X-Webhook-Signature, X-Signature';
 const CORS_EXPOSE_HEADERS = 'X-Cache, Retry-After';
 const CORS_MAX_AGE_SECONDS = '86400';
 

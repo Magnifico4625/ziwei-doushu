@@ -2,7 +2,8 @@
  * 无状态 HMAC-SHA256 访问令牌与支付 Webhook 签名校验模块。
  * 所有摘要比对均使用 node:crypto timingSafeEqual 防止时序侧信道。
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { stripYearSuffixFromKey } from '../ziwei/chart-analyzer';
 import { getServerConfig } from './env';
 
 export type EntitlementScope = 'interpret' | 'heming' | 'bundle';
@@ -187,7 +188,10 @@ export function verifyAccessToken(
     return { valid: false, reason: 'scope_mismatch' };
   }
 
-  if (expectedKey !== undefined && parsedPayload.targetKey !== expectedKey) {
+  if (
+    expectedKey !== undefined &&
+    stripYearSuffixFromKey(parsedPayload.targetKey) !== stripYearSuffixFromKey(expectedKey)
+  ) {
     return { valid: false, reason: 'target_key_mismatch' };
   }
 
@@ -263,4 +267,61 @@ export function extractBearerToken(req: Request, bodyToken?: unknown): string | 
   }
 
   return null;
+}
+
+/**
+ * Generate a cryptographically random capability token scoped to a checkout order
+ * (`GET /api/billing/order` authorization).
+ */
+export function generateOrderToken(): string {
+  return randomBytes(24).toString('base64url');
+}
+
+/**
+ * Compute lowercase hex SHA-256 hash of an order capability token for DB storage.
+ */
+export function hashOrderToken(orderToken: string): string {
+  const trimmed = orderToken.trim();
+  if (!trimmed) {
+    throw new Error('orderToken must be non-empty');
+  }
+  return createHash('sha256').update(trimmed, 'utf8').digest('hex');
+}
+
+/**
+ * Constant-time verification of an order capability token against stored SHA-256 hash.
+ */
+export function verifyOrderToken(
+  orderToken: string | null | undefined,
+  expectedHash: string | null | undefined,
+): boolean {
+  if (typeof orderToken !== 'string' || typeof expectedHash !== 'string') {
+    return false;
+  }
+  const trimmedToken = orderToken.trim();
+  const trimmedHash = expectedHash.trim();
+  if (!trimmedToken || !SHA256_HEX_RE.test(trimmedHash)) {
+    return false;
+  }
+
+  const actualDigest = createHash('sha256').update(trimmedToken, 'utf8').digest();
+  const expectedDigest = Buffer.from(trimmedHash, 'hex');
+  if (actualDigest.length !== expectedDigest.length) {
+    return false;
+  }
+
+  return timingSafeEqual(actualDigest, expectedDigest);
+}
+
+/**
+ * Extract an order polling capability token from `Authorization: Bearer <token>`
+ * or `x-order-token` header.
+ */
+export function extractOrderToken(req: Request): string | null {
+  const bearer = extractBearerToken(req);
+  if (bearer !== null) {
+    return bearer;
+  }
+  const headerToken = req.headers.get('x-order-token')?.trim();
+  return headerToken && headerToken.length > 0 ? headerToken : null;
 }

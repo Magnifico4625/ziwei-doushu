@@ -5,11 +5,19 @@ import {
   extractClientIp,
   type RateLimitRedisClient,
 } from '@/lib/server/rate-limit';
+import { MAX_CHART_BODY_BYTES, readJsonBodyWithLimit } from '@/lib/server/request-body';
+import {
+  parseIanaTimeZoneField,
+  parseQueryTimezoneParams,
+  parseTzAliasField,
+  type ParsedTzAlias,
+} from '@/lib/server/timezone-input';
 import {
   getChartInterpretation,
   getSynastryInterpretation,
 } from '@/lib/server/db';
 import {
+  canonicalPairEntitlementKey,
   canonicalPairKey,
   getRedisClient,
   hashQuestion,
@@ -20,6 +28,7 @@ import { generateChart } from '@/lib/ziwei/algorithm';
 import {
   analyzeChartSummary,
   getChartCacheKey,
+  getChartEntitlementKey,
 } from '@/lib/ziwei/chart-analyzer';
 import {
   findCityByQuery,
@@ -181,7 +190,11 @@ function resolveLocalizedCityDisplay(
   return queried ? getCityDisplayName(queried.city, lang) : rawCity;
 }
 
-function parseBirthInfo(raw: unknown, lang: SupportedLang): ParseResult<BirthInfo> {
+function parseBirthInfo(
+  raw: unknown,
+  lang: SupportedLang,
+  fallbackZone: ParsedTzAlias = {},
+): ParseResult<BirthInfo> {
   if (!isPlainRecord(raw)) {
     return { ok: false, message: 'birthInfo must be an object' };
   }
@@ -215,8 +228,16 @@ function parseBirthInfo(raw: unknown, lang: SupportedLang): ParseResult<BirthInf
       return { ok: false, message: 'birthInfo.utcOffsetMinutes must be an integer in [-720, 840]' };
     }
   }
-  if (raw.timeZone !== undefined && typeof raw.timeZone !== 'string') {
-    return { ok: false, message: 'birthInfo.timeZone must be a string' };
+
+  const parsedTimeZone = parseIanaTimeZoneField(raw.timeZone, 'birthInfo.timeZone', {
+    allowEmptyString: false,
+  });
+  if (!parsedTimeZone.ok) {
+    return parsedTimeZone;
+  }
+  const parsedTzAlias = parseTzAliasField(raw.tz, 'birthInfo.tz');
+  if (!parsedTzAlias.ok) {
+    return parsedTzAlias;
   }
 
   const rawProvince = typeof raw.province === 'string' ? raw.province : '';
@@ -224,9 +245,17 @@ function parseBirthInfo(raw: unknown, lang: SupportedLang): ParseResult<BirthInf
   const loc = resolveCityLocation(rawProvince, rawCity, lang);
 
   const longitude = typeof raw.longitude === 'number' ? raw.longitude : loc.longitude;
+  const timeZone =
+    parsedTimeZone.value ??
+    parsedTzAlias.value.timeZone ??
+    fallbackZone.timeZone ??
+    loc.timeZone;
   const utcOffsetMinutes =
-    typeof raw.utcOffsetMinutes === 'number' ? raw.utcOffsetMinutes : loc.utcOffsetMinutes;
-  const timeZone = typeof raw.timeZone === 'string' ? raw.timeZone : loc.timeZone;
+    typeof raw.utcOffsetMinutes === 'number'
+      ? raw.utcOffsetMinutes
+      : parsedTzAlias.value.utcOffsetMinutes ??
+        fallbackZone.utcOffsetMinutes ??
+        loc.utcOffsetMinutes;
 
   return {
     ok: true,
@@ -254,7 +283,11 @@ function parseStrictDigits(raw: unknown): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function parseBirthForm(raw: unknown, lang: SupportedLang): ParseResult<BirthFormState> {
+function parseBirthForm(
+  raw: unknown,
+  lang: SupportedLang,
+  fallbackZone: ParsedTzAlias = {},
+): ParseResult<BirthFormState> {
   if (!isPlainRecord(raw)) {
     return { ok: false, message: 'form must be an object' };
   }
@@ -310,8 +343,16 @@ function parseBirthForm(raw: unknown, lang: SupportedLang): ParseResult<BirthFor
       return { ok: false, message: 'form.utcOffsetMinutes must be an integer in [-720, 840]' };
     }
   }
-  if (raw.timeZone !== undefined && typeof raw.timeZone !== 'string') {
-    return { ok: false, message: 'form.timeZone must be a string' };
+
+  const parsedTimeZone = parseIanaTimeZoneField(raw.timeZone, 'form.timeZone', {
+    allowEmptyString: true,
+  });
+  if (!parsedTimeZone.ok) {
+    return parsedTimeZone;
+  }
+  const parsedTzAlias = parseTzAliasField(raw.tz, 'form.tz');
+  if (!parsedTzAlias.ok) {
+    return parsedTzAlias;
   }
 
   const rawProvince = typeof raw.province === 'string' ? raw.province : '';
@@ -319,13 +360,16 @@ function parseBirthForm(raw: unknown, lang: SupportedLang): ParseResult<BirthFor
   const loc = resolveCityLocation(rawProvince, rawCity, lang);
 
   const longitude = typeof raw.longitude === 'number' ? raw.longitude : (loc.longitude ?? 120);
-  const timeZone = typeof raw.timeZone === 'string' ? raw.timeZone : loc.timeZone;
+  const timeZone =
+    parsedTimeZone.value !== undefined
+      ? parsedTimeZone.value
+      : parsedTzAlias.value.timeZone ?? fallbackZone.timeZone ?? loc.timeZone;
   const utcOffsetMinutes =
     typeof raw.utcOffsetMinutes === 'number'
       ? raw.utcOffsetMinutes
-      : !timeZone
-        ? loc.utcOffsetMinutes
-        : undefined;
+      : parsedTzAlias.value.utcOffsetMinutes ??
+        fallbackZone.utcOffsetMinutes ??
+        (!timeZone ? loc.utcOffsetMinutes : undefined);
 
   return {
     ok: true,
@@ -413,12 +457,13 @@ function resolveChartInput(
   formRaw: unknown,
   lateZishi: LateZishiRule,
   lang: SupportedLang,
+  fallbackZone: ParsedTzAlias = {},
 ): ParseResult<ZiweiChart> {
   if (chartRaw !== undefined) {
     return parseChartObject(chartRaw, lang);
   }
   if (formRaw !== undefined) {
-    const parsedForm = parseBirthForm(formRaw, lang);
+    const parsedForm = parseBirthForm(formRaw, lang, fallbackZone);
     if (!parsedForm.ok) return parsedForm;
     try {
       const info = formToBirthInfo(parsedForm.value, lateZishi);
@@ -429,7 +474,7 @@ function resolveChartInput(
     }
   }
   if (birthInfoRaw !== undefined) {
-    const parsedInfo = parseBirthInfo(birthInfoRaw, lang);
+    const parsedInfo = parseBirthInfo(birthInfoRaw, lang, fallbackZone);
     if (!parsedInfo.ok) return parsedInfo;
     try {
       return { ok: true, value: generateChart(parsedInfo.value) };
@@ -446,6 +491,12 @@ export async function OPTIONS(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  const bodyResult = await readJsonBodyWithLimit(req, MAX_CHART_BODY_BYTES);
+  if (!bodyResult.ok) {
+    return jsonError(req, bodyResult.status, bodyResult.error, bodyResult.code, bodyResult.message);
+  }
+  const rawBody = bodyResult.value;
+
   const cfg = getServerConfig();
   const ip = extractClientIp(req);
   const rl = await checkRateLimit({
@@ -465,16 +516,25 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  let rawBody: unknown;
-  try {
-    rawBody = await req.json();
-  } catch {
-    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
+  const queryZoneParsed = parseQueryTimezoneParams(req);
+  if (!queryZoneParsed.ok) {
+    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', queryZoneParsed.message);
   }
-
-  if (!isPlainRecord(rawBody)) {
-    return jsonError(req, 400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
+  const bodyTzParsed = parseTzAliasField(rawBody.tz, 'tz');
+  if (!bodyTzParsed.ok) {
+    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', bodyTzParsed.message);
   }
+  const bodyTimeZoneParsed = parseIanaTimeZoneField(rawBody.timeZone, 'timeZone', {
+    allowEmptyString: false,
+  });
+  if (!bodyTimeZoneParsed.ok) {
+    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', bodyTimeZoneParsed.message);
+  }
+  const fallbackZone: ParsedTzAlias = {
+    ...queryZoneParsed.value,
+    ...bodyTzParsed.value,
+    ...(bodyTimeZoneParsed.value !== undefined ? { timeZone: bodyTimeZoneParsed.value } : {}),
+  };
 
   const langParsed = parseLang(rawBody.lang);
   if (!langParsed.ok) {
@@ -508,6 +568,7 @@ export async function POST(req: Request): Promise<Response> {
       rawBody.formA,
       lateZishi,
       lang,
+      fallbackZone,
     );
     if (!resolvedA.ok) {
       return jsonError(req, 400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner A: ${resolvedA.message}`);
@@ -518,6 +579,7 @@ export async function POST(req: Request): Promise<Response> {
       rawBody.formB,
       lateZishi,
       lang,
+      fallbackZone,
     );
     if (!resolvedB.ok) {
       return jsonError(req, 400, 'invalid_synastry_input', 'INVALID_INPUT', `Partner B: ${resolvedB.message}`);
@@ -526,6 +588,7 @@ export async function POST(req: Request): Promise<Response> {
     const chartA = resolvedA.value;
     const chartB = resolvedB.value;
     const pairKey = canonicalPairKey(chartA, chartB, targetYear);
+    const entitlementKey = canonicalPairEntitlementKey(chartA, chartB);
     const synastry = analyzeSynastry(chartA, chartB, { targetYear });
     const scopedQHash = scopedQuestionHash(hashQuestion(), lang);
     const hasCachedInterpretation = Boolean(
@@ -542,6 +605,7 @@ export async function POST(req: Request): Promise<Response> {
           mode: 'synastry',
           lang,
           pairKey,
+          entitlementKey,
           chartA,
           chartB,
           synastry,
@@ -569,6 +633,7 @@ export async function POST(req: Request): Promise<Response> {
     rawBody.form,
     lateZishi,
     lang,
+    fallbackZone,
   );
   if (!resolvedNatal.ok) {
     return jsonError(req, 400, 'invalid_birth_input', 'INVALID_INPUT', resolvedNatal.message);
@@ -576,6 +641,7 @@ export async function POST(req: Request): Promise<Response> {
 
   const chart = resolvedNatal.value;
   const cacheKey = getChartCacheKey(chart, { targetYear });
+  const entitlementKey = getChartEntitlementKey(chart);
   const summary = analyzeChartSummary(chart, { targetYear });
   const patterns = detectPatterns(chart);
   const topicKey = typeof rawBody.topicKey === 'string' && rawBody.topicKey.trim().length > 0
@@ -599,6 +665,7 @@ export async function POST(req: Request): Promise<Response> {
         mode: 'natal',
         lang,
         cacheKey,
+        entitlementKey,
         chart,
         summary,
         patterns,
