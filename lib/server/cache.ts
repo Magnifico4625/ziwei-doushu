@@ -199,14 +199,17 @@ export function canonicalPairKey(
   const keyA = getChartCacheKey(chartA);
   const keyB = getChartCacheKey(chartB);
   const [first, second] = keyA <= keyB ? [keyA, keyB] : [keyB, keyA];
-  const raw =
-    targetYear !== undefined
-      ? `${first}|${second}|y${targetYear}`
-      : `${first}|${second}`;
-  const digest = sha256Hex(raw, 32);
+  const digest = sha256Hex(`${first}|${second}`, 32);
   return targetYear !== undefined
     ? `heming:v1:${digest}:y${targetYear}`
     : `heming:v1:${digest}`;
+}
+
+export function canonicalPairEntitlementKey(
+  chartA: ZiweiChart,
+  chartB: ZiweiChart,
+): string {
+  return canonicalPairKey(chartA, chartB);
 }
 
 export function buildSynastryRedisKey(

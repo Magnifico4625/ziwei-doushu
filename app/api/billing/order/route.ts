@@ -1,7 +1,12 @@
 import { getServerEnv } from '@/lib/server/env';
-import { signAccessToken } from '@/lib/server/access-token';
+import {
+  extractOrderToken,
+  signAccessToken,
+  verifyOrderToken,
+} from '@/lib/server/access-token';
 import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { getOrder } from '@/lib/server/db';
+import { stripYearSuffixFromKey } from '@/lib/ziwei/chart-analyzer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,9 +52,30 @@ export async function GET(req: Request): Promise<Response> {
     );
   }
 
+  const orderToken = extractOrderToken(req);
+  if (!orderToken) {
+    return jsonError(
+      req,
+      401,
+      'unauthorized',
+      'UNAUTHORIZED',
+      'Order authorization token is required.',
+    );
+  }
+
   const order = await getOrder(orderId);
   if (!order) {
     return jsonError(req, 404, 'order_not_found', 'NOT_FOUND', 'Order not found.');
+  }
+
+  if (!verifyOrderToken(orderToken, order.claimTokenHash)) {
+    return jsonError(
+      req,
+      401,
+      'invalid_order_token',
+      'UNAUTHORIZED',
+      'Invalid order authorization token.',
+    );
   }
 
   if (order.status !== 'paid') {
@@ -82,10 +108,11 @@ export async function GET(req: Request): Promise<Response> {
     );
   }
 
+  const normalizedTargetKey = stripYearSuffixFromKey(order.targetKey);
   const accessToken = signAccessToken(
     {
       scope: order.scope,
-      targetKey: order.targetKey,
+      targetKey: normalizedTargetKey,
       orderId: order.orderId,
     },
     cfg.accessTokenSecret,

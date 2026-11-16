@@ -6,9 +6,10 @@ import {
   extractClientIp,
   type RateLimitRedisClient,
 } from '@/lib/server/rate-limit';
+import { MAX_AI_BODY_BYTES, readJsonBodyWithLimit } from '@/lib/server/request-body';
+import { parseIanaTimeZoneField } from '@/lib/server/timezone-input';
 import {
   getChartInterpretation,
-  hasPaidEntitlement,
   saveChartInterpretation,
 } from '@/lib/server/db';
 import {
@@ -28,7 +29,10 @@ import {
   streamLlmSse,
   type ChatMessage,
 } from '@/lib/server/llm';
-import { getChartCacheKey } from '@/lib/ziwei/chart-analyzer';
+import {
+  getChartCacheKey,
+  getChartEntitlementKey,
+} from '@/lib/ziwei/chart-analyzer';
 import { isValidGregorianDate } from '@/lib/ziwei/gregorian-date';
 import { normalizeLang, type SupportedLang } from '@/lib/ziwei/i18n';
 import { detectPatterns } from '@/lib/ziwei/patterns';
@@ -128,6 +132,14 @@ function parseChart(raw: unknown): ParseResult<ZiweiChart> {
   if (gender !== 'male' && gender !== 'female') {
     return { ok: false, message: "chart.birthInfo.gender must be 'male' or 'female'" };
   }
+  const parsedTimeZone = parseIanaTimeZoneField(
+    raw.birthInfo.timeZone,
+    'chart.birthInfo.timeZone',
+    { allowEmptyString: false },
+  );
+  if (!parsedTimeZone.ok) {
+    return parsedTimeZone;
+  }
   if (!isPlainRecord(raw.lunarInfo)) {
     return { ok: false, message: 'chart.lunarInfo is required' };
   }
@@ -220,6 +232,12 @@ export async function OPTIONS(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  const bodyResult = await readJsonBodyWithLimit(req, MAX_AI_BODY_BYTES);
+  if (!bodyResult.ok) {
+    return jsonError(req, bodyResult.status, bodyResult.error, bodyResult.code, bodyResult.message);
+  }
+  const rawBody = bodyResult.value;
+
   const cfg = getServerConfig();
   const ip = extractClientIp(req);
   const rl = await checkRateLimit({
@@ -237,17 +255,6 @@ export async function POST(req: Request): Promise<Response> {
       'Too many interpretation requests; please retry shortly.',
       { 'Retry-After': String(rl.retryAfterSeconds) },
     );
-  }
-
-  let rawBody: unknown;
-  try {
-    rawBody = await req.json();
-  } catch {
-    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
-  }
-
-  if (!isPlainRecord(rawBody)) {
-    return jsonError(req, 400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
   }
 
   const langParsed = parseLang(rawBody.lang);
@@ -272,17 +279,15 @@ export async function POST(req: Request): Promise<Response> {
   const messages = messagesParsed.value;
   const targetYear = targetYearParsed.value;
   const chartKey = getChartCacheKey(chart, { targetYear });
+  const entitlementKey = getChartEntitlementKey(chart);
 
   // Strict paywall guard BEFORE every cache read or LLM invocation.
-  // Entitlement (`chartKey`) stays language-agnostic across UI language switches.
+  // Requires a valid signed accessToken tied to the year- & language-agnostic entitlementKey.
   if (cfg.aiPaywallMode === 'strict') {
     const token = extractBearerToken(req, rawBody.accessToken);
-    let authorized = false;
-    if (token !== null) {
-      authorized = verifyAccessToken(token, 'interpret', chartKey, cfg.accessTokenSecret).valid;
-    } else {
-      authorized = await hasPaidEntitlement('interpret', chartKey);
-    }
+    const authorized =
+      token !== null &&
+      verifyAccessToken(token, 'interpret', entitlementKey, cfg.accessTokenSecret).valid;
 
     if (!authorized) {
       return withCors(
@@ -292,6 +297,7 @@ export async function POST(req: Request): Promise<Response> {
             error: 'payment_required',
             code: 'PAYWALL_LOCKED',
             cacheKey: chartKey,
+            entitlementKey,
           },
           { status: 402 },
         ),

@@ -311,14 +311,14 @@ npm run build                 # Next.js 生产构建检查
 
 > **关于后端 API 路由与零 LLM 架构（完整请求/响应契约见 [`docs/API.md`](./docs/API.md)）：**
 > - 纯前端排盘、命盘展示、合盘起盘依旧在浏览器里用本仓库的引擎完成，**不需要任何 API Key 或数据库**。
-> - 本仓库现已内置 Next.js App Router 后端路由（`app/api/`）与服务端基础设施（`lib/server/`、`db/schema.sql`），并默认启用多语言（`lang: 'ru' | 'zh' | 'en'`）与 `ALLOWED_ORIGINS` 跨域白名单（`lib/server/cors.ts`，所有 7 个 `/api/*` 路由均导出 `OPTIONS` 预检并用 `withCors` 包装响应）：
+> - 本仓库现已内置 Next.js App Router 后端路由（`app/api/`）与服务端基础设施（`lib/server/`、`db/schema.sql`），并默认启用多语言（`lang: 'ru' | 'zh' | 'en'`）与 `ALLOWED_ORIGINS` 跨域白名单（`lib/server/cors.ts`，所有 7 个 `/api/*` 路由均导出 `OPTIONS` 预检并用 `withCors` 包装响应，允许 `X-Order-Token` 等请求头）：
 >   - `GET /api/health`：检查 PostgreSQL 与 Redis 健康状态（未配置 `DATABASE_URL` / `REDIS_URL` 时自动降级为内存模式），返回非敏感配置（`aiProvider`、`paywallMode`）。
->   - `POST /api/chart`：**零 LLM（Zero-LLM，$0 AI 成本）** 预检与免费排盘接口，支持 `lang: 'ru' | 'zh' | 'en'`、多语言城市检索（`findCityByQuery`，支持 `Москва` / `Moscow` / `莫斯科`）、同步直接格局识别（`detectPatterns`）、免费确定性 `命宫` 解读（`freeLifePalace`）、多语言付费钩子（`teasers`）与本地化摘要/格局输出，绝不导入或调用大模型。
->   - **完整商业化支付闭环**（`/api/billing/*`）：
->     - `POST /api/billing/checkout`：校验 `scope`（`interpret` / `heming` / `bundle`）与 `targetKey`（`chartKey`/`pairKey`），创建 `'pending'` 订单并返回 `orderId` 与 `checkoutUrl`（配置项 `APP_PUBLIC_URL`、`BILLING_PROVIDER`、`BILLING_CHECKOUT_BASE_URL`）。
->     - `GET /api/billing/order?orderId=...`：轮询订单状态；未支付时仅返回 `paid: false`（绝不泄露 `accessToken`），`paid` 后签发并返回 HMAC `accessToken`。
->     - `POST /api/billing/webhook`：通过 `PAYWALL_WEBHOOK_SECRET` 校验 HMAC-SHA256 签名（`timingSafeEqual`），支持将 `'pending'` 订单原子流转为 `'paid'`（或直接幂等落库 `webhook_events` / `orders`），并在 `status === 'paid'` 时签发 HMAC `accessToken`。
->   - `POST /api/interpret` 与 `POST /api/heming`：支持 `lang: 'ru' | 'zh' | 'en'` 与多语言系统提示词；默认开启严格付费守卫 `AI_PAYWALL_MODE=strict`（基于语言无关的 `chartKey` / `pairKey` 校验权限，切换界面语言不失效，在读取付费缓存或调用 LLM 之前拦截未授权请求并返回 `402 PAYWALL_LOCKED`），内置 IP 限流、按语言隔离的 Redis + PostgreSQL 双层缓存（含内存降级）与 SSE 流式输出（支持 `deepseek`、`anthropic`、`mimo`、`openai-compatible`），`/api/heming` `previewOnly: true` 返回零 LLM 本地化合盘总览与 `teasers`。本地开发免付费联调 AI 时，可在 `.env.local` 中设置 `AI_PAYWALL_MODE=off` 与对应模型 Key。
+>   - `POST /api/chart`：**零 LLM（Zero-LLM，$0 AI 成本，绝不导入 `lib/server/llm.ts`）** 预检与免费排盘接口，请求体上限 `128 KiB`（超限返回 `413 PAYLOAD_TOO_LARGE`），严格校验 `?tz=`/`timeZone`/`tz`（非法时区如 `Not/AZone` 返回 `400 INVALID_INPUT`），支持 `lang: 'ru' | 'zh' | 'en'`、多语言城市检索（`findCityByQuery`，支持 `Москва` / `Moscow` / `莫斯科`）、同步直接格局识别（`detectPatterns`）、免费确定性 `命宫` 解读（`freeLifePalace`）、多语言付费钩子（`teasers`）与年份无关权益键 `entitlementKey`（区分含 `:y<targetYear>` 的缓存键 `cacheKey`/`pairKey`）。
+>   - **完整商业化支付闭环**（`/api/billing/*`，请求体上限 `32 KiB`，超限返回 `413`）：
+>     - `POST /api/billing/checkout`：校验 `scope`（`interpret` / `heming` / `bundle`）、自动剥离 `:y<targetYear>` 的 `targetKey` 与正数金额（`amountMinor > 0` / `amount > 0`，`<= 0` 返回 `400`），创建 `'pending'` 订单并返回 `orderId`、订单查询凭证 `orderToken` 与 `checkoutUrl`（配置项 `APP_PUBLIC_URL`、`BILLING_PROVIDER`、`BILLING_CHECKOUT_BASE_URL`）。
+>     - `GET /api/billing/order?orderId=...`：强制校验 `X-Order-Token` 请求头或 `orderToken` 查询参数（缺失/不匹配返回 `401 UNAUTHORIZED`）；未支付时仅返回 `paid: false`（绝不泄露 `accessToken`），`paid` 后签发并返回年份无关的 HMAC `accessToken`。
+>     - `POST /api/billing/webhook`：通过 `PAYWALL_WEBHOOK_SECRET` 校验 HMAC-SHA256 签名（`timingSafeEqual`），拒收 `amountMinor <= 0`（`400`）并剥离 `:y<targetYear>` 落库/赋权，支持将 `'pending'` 订单原子流转为 `'paid'`（保留 `claim_token_hash`），并在 `status === 'paid'` 时签发 HMAC `accessToken`。
+>   - `POST /api/interpret` 与 `POST /api/heming`：请求体上限 `128 KiB`（`413`），校验命盘 `timeZone`（非法返回 `400`），支持 `lang: 'ru' | 'zh' | 'en'` 与多语言系统提示词；默认开启严格付费守卫 `AI_PAYWALL_MODE=strict`，**必须**提供有效签名 `accessToken`（`Authorization: Bearer` 或 `accessToken` 字段，不凭裸 `chartKey`/`pairKey` 放行），基于去除了 `:y<targetYear>` 且语言无关的 `entitlementKey` 校验权限（带年与无年报告共用同一权益，同时保留 `:y<targetYear>` 与语言隔离的 Redis + PostgreSQL 双层缓存），未授权在读付费缓存或调 LLM 前返回 `402 PAYWALL_LOCKED`，缺少或无效模型配置返回 `503 LLM_CONFIG_ERROR`。`/api/heming` 虽引入 `lib/server/llm.ts` 用于付费 SSE，但 `previewOnly: true` 会在限流、付费校验与大模型调用之前直接返回零 LLM 本地化合盘总览与 `teasers`。本地开发免付费联调 AI 时，可在 `.env.local` 中设置 `AI_PAYWALL_MODE=off` 与对应模型 Key。
 
 ---
 

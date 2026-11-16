@@ -693,8 +693,21 @@ export function getBirthChartKeyParams(
   return params;
 }
 
+const CANONICAL_YEAR_SUFFIX_RE = /^((?:ziwei|heming):v\d+:.+?):y\d+$/;
+
+/**
+ * Strip the trailing `:y<year>` cache-partition suffix from canonical chart or pair keys
+ * so annual and timeless variants share the same purchase/entitlement key.
+ */
+export function stripYearSuffixFromKey(key: string): string {
+  const trimmed = key.trim();
+  const match = CANONICAL_YEAR_SUFFIX_RE.exec(trimmed);
+  return match ? match[1] : trimmed;
+}
+
 /**
  * Generate a canonical deterministic cache key for a ZiweiChart.
+ * Includes optional `:y<targetYear>` suffix to isolate annual cached text.
  */
 export function getChartCacheKey(
   chart: ZiweiChart,
@@ -703,6 +716,19 @@ export function getChartCacheKey(
   const params = getBirthChartKeyParams(chart, options);
   const base = `ziwei:v1:${params.solarDate}:${params.hour}:${params.gender}:${params.brightnessSchool}:${params.leapMonthPolicy}`;
   return params.targetYear !== undefined ? `${base}:y${params.targetYear}` : base;
+}
+
+/**
+ * Return the year-independent canonical entitlement key for a natal chart.
+ */
+export function getChartEntitlementKey(
+  chart: ZiweiChart,
+  options?: Omit<ChartCacheKeyOptions, 'targetYear'>,
+): string {
+  return getChartCacheKey(chart, {
+    brightnessSchool: options?.brightnessSchool,
+    leapMonthPolicy: options?.leapMonthPolicy,
+  });
 }
 
 /**

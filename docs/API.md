@@ -1,12 +1,14 @@
 # Zi Wei Dou Shu Backend & Engine API Reference
 
-This document specifies the HTTP API routes, billing lifecycle, CORS configuration, persistence schema, and headless TypeScript/Node engine exports built into `Magnifico4625/ziwei-doushu`.
+This document specifies the HTTP API routes, billing lifecycle, CORS configuration, request limits, key semantics, persistence schema, and headless TypeScript/Node engine exports built into `Magnifico4625/ziwei-doushu`.
 
-**Core Design Invariants**
+## Core Design Invariants
 
-1. **Zero-LLM Pre-Paywall (`$0.00` AI cost)**: `POST /api/chart` and `POST /api/heming` with `previewOnly: true` compute deterministic charts, classical patterns, Life Palace (`命宫`) free readings, and paywall teasers without importing `lib/server/llm.ts` or invoking any LLM.
-2. **Strict Paywall Guard**: With `AI_PAYWALL_MODE=strict` (default), paid endpoints (`/api/interpret`, full `/api/heming`) verify entitlement (`accessToken` or DB `paid` order) **before** reading paid cache or calling any LLM, returning `402 PAYWALL_LOCKED` on unauthorized requests.
-3. **Language-Agnostic Entitlements + Language-Isolated Caches**: Payment entitlements bind to canonical chart/pair hashes (`cacheKey` / `pairKey`), so switching UI `lang` after purchase keeps access valid, while Redis and PostgreSQL text caches are isolated per language (`ru`, `zh`, `en`).
+1. **Zero-LLM Endpoints (`$0.00` AI cost)**:
+   - `app/api/chart/route.ts` (`POST /api/chart`) **never imports `lib/server/llm.ts`** and computes natal charts, synastry comparisons, patterns (`detectPatterns`), free Life Palace (`命宫`) readings, and paywall teasers purely deterministically.
+   - `app/api/heming/route.ts` imports `lib/server/llm.ts` for its paid SSE branch, while requests with `previewOnly: true` short-circuit and return before rate limiting, paywall verification, or any LLM call (`$0.00` AI cost).
+2. **Strict Token-Based Paywall Guard**: With `AI_PAYWALL_MODE=strict` (default), paid endpoints (`POST /api/interpret`, paid `POST /api/heming`) **always** require a valid HMAC-signed `accessToken` (`Authorization: Bearer <accessToken>` or JSON body `accessToken`) **before** reading paid cache or invoking any LLM, returning `402 PAYWALL_LOCKED` otherwise (never granting access from a bare `cacheKey` or `pairKey` alone).
+3. **Year- & Language-Agnostic Entitlements + Isolated Caches**: Purchases bind to the base `entitlementKey` (without `:y<targetYear>` or `lang`), so a report bought with or without a target year authorizes timeless and annual queries across `'ru' | 'zh' | 'en'`. Meanwhile, cached texts in Redis and PostgreSQL remain isolated per `:y<targetYear>` and per language.
 4. **Commercial MIT Runtime Cleanliness**: Runtime modules (`lib/ziwei/*`, `lib/server/*`, `app/api/*`) contain zero `CC BY-NC-SA 4.0` lecture quotes (`ni_quote` / `docs/tianji-ziwei/`), and core modules (`lib/ziwei/patterns.ts`, `lib/ziwei/famous.ts`) have zero `server-only` dependencies.
 
 ---
@@ -31,23 +33,44 @@ This document specifies the HTTP API routes, billing lifecycle, CORS configurati
 
 ---
 
-## CORS & Preflight (`lib/server/cors.ts`)
+## CORS, Body Size Limits & Localization
+
+### CORS & Preflight (`lib/server/cors.ts`)
 
 All 7 `/api/*` routes export `OPTIONS` preflight handlers and wrap every response (JSON, errors, and `ReadableStream` SSE) with `withCors(request, response)`:
 
 - **Allowed Methods**: `GET, POST, OPTIONS`
-- **Allowed Request Headers**: `Content-Type, Authorization, X-Requested-With, X-Webhook-Signature, X-Signature`
+- **Allowed Request Headers**: `Content-Type, Authorization, X-Order-Token, X-Requested-With, X-Webhook-Signature, X-Signature`
 - **Exposed Response Headers**: `X-Cache, Retry-After`
 - **Preflight Behavior**:
   - Allowed `Origin` (matching `ALLOWED_ORIGINS` or `*`) or absent `Origin` -> `204 No Content`.
   - Disallowed `Origin` -> `403` JSON `{ "error": "cors_origin_denied", "code": "CORS_FORBIDDEN" }`.
 
----
+### Request Body Size Limits (`lib/server/request-body.ts`)
 
-## Localization (`lang`)
+Every JSON/webhook `POST` route enforces hard byte caps (checking both `Content-Length` and incremental stream bytes, canceling oversized streams with `413 PAYLOAD_TOO_LARGE` before JSON parsing):
+
+- `/api/chart`, `/api/interpret`, `/api/heming`: **`128 KiB` (`131072` bytes)**
+- `/api/billing/checkout`, `/api/billing/webhook`: **`32 KiB` (`32768` bytes)**
+
+### Localization (`lang`)
 
 - Supported values: `'ru' | 'zh' | 'en'` (normalized via `normalizeLang` in `lib/ziwei/i18n.ts`).
 - When `lang` is omitted (`undefined` or `null`) on HTTP API routes, it defaults to `'zh'` for backwards compatibility with existing clients. External localized frontends (such as Russian UIs) should pass `"lang": "ru"` explicitly.
+
+---
+
+## Canonical Keys & Year Suffixes (`cacheKey` / `pairKey` vs `entitlementKey`)
+
+- **Natal chart cache key** (`getChartCacheKey(chart, { targetYear })`):
+  - Without year (also the **`entitlementKey`**): `ziwei:v1:<solarDate>:<hour>:<gender>:<brightnessSchool>:<leapMonthPolicy>`
+  - With `targetYear`: `<base>:y<targetYear>` (for example `ziwei:v1:1990-05-15:4:male:default:split:y2026`)
+- **Synastry cache key** (`canonicalPairKey(chartA, chartB, targetYear)`):
+  - Without year (also the **`entitlementKey`**): `heming:v1:<sha256_32(first|second)>` (canonical sorted chart keys `first <= second`)
+  - With `targetYear`: `heming:v1:<sha256_32(first|second)>:y<targetYear>`
+- **Why both keys exist**:
+  - `:y<targetYear>` isolates annual interpretations from timeless interpretations in Redis and PostgreSQL (`chart_interpretations`, `synastry_interpretations`).
+  - Billing (`checkout`, `webhook`, `verifyAccessToken`) strips any trailing `:y<targetYear>` via `stripYearSuffixFromKey`, so buying a report with or without `targetYear` unlocks both timeless and any annual query for the same chart or pair.
 
 ---
 
@@ -74,6 +97,9 @@ Checks PostgreSQL and Redis connectivity (reports in-memory fallback when unconf
 ### 2. `POST /api/chart` (`$0.00` Zero-LLM)
 
 Generates deterministic natal charts or synastry comparisons, computes true solar time / historical IANA DST / CN DST warnings, detects patterns synchronously via `detectPatterns(chart)`, generates localized `freeLifePalace` readings (`命宫`), and returns localized pre-paywall teasers (`teasers`). Resolves localized city names via `findCityByQuery` (e.g., `"Москва"`, `"Moscow"`, `"莫斯科"`).
+
+- **Time zone validation**: Any supplied `tz` query param (`?tz=...`), `timeZone` query param (`?timeZone=...`), top-level `tz`/`timeZone`, or nested `birthInfo.{tz,timeZone}` / `form.{tz,timeZone}` / `chart*.birthInfo.timeZone` is strictly validated with `isValidTimeZone` / `[-720, 840]` offset bounds. Unknown zones such as `tz=Not/AZone` or `timeZone: "Not/AZone"` immediately return **`400 INVALID_INPUT`** (`invalid_timezone` / `invalid_birth_input` / `invalid_synastry_input`).
+- **Body limit**: `128 KiB` (`413 PAYLOAD_TOO_LARGE` when exceeded).
 
 #### Natal Mode Request
 
@@ -102,7 +128,8 @@ Accepts either `birthInfo` (numeric `hour` branch index `0..11`) or UI `form` (`
   "ok": true,
   "mode": "natal",
   "lang": "ru",
-  "cacheKey": "<sha256-chart-key>",
+  "cacheKey": "ziwei:v1:1992-06-15:6:male:default:split:y2026",
+  "entitlementKey": "ziwei:v1:1992-06-15:6:male:default:split",
   "chart": { "...": "ZiweiChart" },
   "summary": { "...": "ChartAnalysisSummary" },
   "patterns": [ { "...": "Pattern" } ],
@@ -116,7 +143,7 @@ Accepts either `birthInfo` (numeric `hour` branch index `0..11`) or UI `form` (`
   },
   "teasers": {
     "lang": "ru",
-    "cacheKey": "<sha256-chart-key>",
+    "cacheKey": "ziwei:v1:1992-06-15:6:male:default:split:y2026",
     "freeLifePalace": { "...": "FreeLifePalaceReading" },
     "patterns": { "count": 2, "headline": "...", "items": [] },
     "lockedTeasers": [
@@ -148,7 +175,8 @@ Send pairs using `chartA`/`birthInfoA`/`formA` and `chartB`/`birthInfoB`/`formB`
   "ok": true,
   "mode": "synastry",
   "lang": "ru",
-  "pairKey": "<canonical-pair-key>",
+  "pairKey": "heming:v1:<32-hex>:y2026",
+  "entitlementKey": "heming:v1:<32-hex>",
   "chartA": { "...": "ZiweiChart" },
   "chartB": { "...": "ZiweiChart" },
   "synastry": { "...": "SynastryResult" },
@@ -161,14 +189,16 @@ Send pairs using `chartA`/`birthInfoA`/`formA` and `chartB`/`birthInfoB`/`formB`
 
 ### 3. `POST /api/billing/checkout`
 
-Creates a `'pending'` order record in `orders` and returns a checkout redirect descriptor.
+Creates a `'pending'` order record in `orders`, generates a cryptographic `orderToken` capability secret (storing only its SHA-256 hash `claim_token_hash` in DB, never in `checkoutUrl`), and returns a checkout redirect descriptor.
+
+- **Body limit**: `32 KiB` (`413 PAYLOAD_TOO_LARGE` when exceeded).
 
 **Request**
 
 ```json
 {
   "scope": "interpret",
-  "targetKey": "<cacheKey-or-pairKey>",
+  "targetKey": "ziwei:v1:1992-06-15:6:male:default:split",
   "provider": "yookassa",
   "currency": "RUB",
   "amountMinor": 99000,
@@ -177,8 +207,8 @@ Creates a `'pending'` order record in `orders` and returns a checkout redirect d
 ```
 
 - `scope`: `'interpret' | 'heming' | 'bundle'`
-- `targetKey` (required, or aliases: `chartKey` for `'interpret'`, `pairKey` for `'heming'`, either for `'bundle'`)
-- `amountMinor` (non-negative integer) or `amount` (number converted to minor units)
+- `targetKey` (required, or aliases: `chartKey` for `'interpret'`, `pairKey` for `'heming'`, either for `'bundle'`; any `:y<targetYear>` suffix is normalized to the year-independent `entitlementKey`)
+- `amountMinor` (optional; if provided must be a **positive integer `> 0`**) or `amount` (optional; if provided must be a **positive finite number** resolving to at least `1` minor unit). Zero or negative amounts are rejected with `400 INVALID_INPUT`.
 
 **Response (`201 Created`, `Cache-Control: no-store`)**
 
@@ -186,10 +216,11 @@ Creates a `'pending'` order record in `orders` and returns a checkout redirect d
 {
   "ok": true,
   "orderId": "ord_...",
+  "orderToken": "<24-byte-base64url-capability-token>",
   "status": "pending",
   "provider": "yookassa",
   "scope": "interpret",
-  "targetKey": "<cacheKey>",
+  "targetKey": "ziwei:v1:1992-06-15:6:male:default:split",
   "checkoutUrl": "http://localhost:3000/checkout?orderId=ord_...&scope=interpret&targetKey=...&provider=yookassa",
   "createdAt": "2026-11-15T10:30:00.000Z",
   "amountMinor": 99000,
@@ -197,11 +228,16 @@ Creates a `'pending'` order record in `orders` and returns a checkout redirect d
 }
 ```
 
+- Store `orderToken` on the initiating client session (or server backend) and pass it via `Authorization: Bearer <orderToken>` or `x-order-token` when polling `GET /api/billing/order`.
+- Errors: `400 INVALID_INPUT` / `BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `503 BILLING_UNCONFIGURED`.
+
 ---
 
 ### 4. `POST /api/billing/webhook`
 
-Verifies HMAC-SHA256 webhook signature (`x-webhook-signature` or `x-signature`, formatted as `sha256=<hex>` or `<hex>`) using `PAYWALL_WEBHOOK_SECRET`, atomically updates `'pending'` orders to `'paid'` (or inserts new orders idempotently via `webhook_events`), and issues a signed HS256 `accessToken`.
+Verifies HMAC-SHA256 webhook signature (`x-webhook-signature` or `x-signature`, formatted as `sha256=<hex>` or `<hex>`) using `PAYWALL_WEBHOOK_SECRET`, atomically updates `'pending'` orders to `'paid'` (preserving `claim_token_hash`, or inserts new orders idempotently via `webhook_events`), and issues a signed HS256 `accessToken`.
+
+- **Body limit**: `32 KiB` (`413 PAYLOAD_TOO_LARGE` when exceeded).
 
 **Request**
 
@@ -210,13 +246,15 @@ Verifies HMAC-SHA256 webhook signature (`x-webhook-signature` or `x-signature`, 
   "eventId": "evt_123456",
   "orderId": "ord_...",
   "scope": "interpret",
-  "targetKey": "<cacheKey>",
+  "targetKey": "ziwei:v1:1992-06-15:6:male:default:split",
   "status": "paid",
   "amountMinor": 99000,
   "currency": "RUB",
   "provider": "yookassa"
 }
 ```
+
+- If `amountMinor` is included, it must be a positive integer (`> 0`). Any `:y<targetYear>` suffix in `targetKey` is stripped cleanly.
 
 **Response (`200 OK`)**
 
@@ -226,19 +264,21 @@ Verifies HMAC-SHA256 webhook signature (`x-webhook-signature` or `x-signature`, 
     "ok": true,
     "orderId": "ord_...",
     "scope": "interpret",
-    "targetKey": "<cacheKey>",
+    "targetKey": "ziwei:v1:1992-06-15:6:male:default:split",
     "idempotent": false,
     "accessToken": "<hs256-jwt>"
   }
   ```
 - If `status !== 'paid'`: `{ "ok": true, "orderId": "...", "scope": "...", "targetKey": "...", "status": "...", "granted": false, "accessToken": null }`.
-- Errors: `401 UNAUTHORIZED` (invalid signature), `400 INVALID_INPUT` / `BAD_REQUEST`, `503 WEBHOOK_UNCONFIGURED` / `TOKEN_UNCONFIGURED`.
+- Errors: `401 UNAUTHORIZED` (invalid signature), `400 INVALID_INPUT` / `BAD_REQUEST`, `413 PAYLOAD_TOO_LARGE`, `503 WEBHOOK_UNCONFIGURED` / `TOKEN_UNCONFIGURED`.
 
 ---
 
 ### 5. `GET /api/billing/order?orderId=<orderId>`
 
-Polls payment state for frontend return URLs. Never exposes `accessToken` until `status === 'paid'`.
+Polls payment state for frontend return URLs. **Requires authorization** via `orderToken` issued by `POST /api/billing/checkout` (prevents unauthorized callers with a leaked/guessed `orderId` from polling status or retrieving `accessToken`). Never exposes `accessToken` until `status === 'paid'`.
+
+**Headers (Required)**: `Authorization: Bearer <orderToken>` or `x-order-token: <orderToken>`
 
 **Responses (`Cache-Control: no-store`)**
 
@@ -250,7 +290,7 @@ Polls payment state for frontend return URLs. Never exposes `accessToken` until 
     "status": "pending",
     "paid": false,
     "scope": "interpret",
-    "targetKey": "<cacheKey>",
+    "targetKey": "ziwei:v1:1992-06-15:6:male:default:split",
     "provider": "yookassa",
     "createdAt": "2026-11-15T10:30:00.000Z"
   }
@@ -263,22 +303,23 @@ Polls payment state for frontend return URLs. Never exposes `accessToken` until 
     "status": "paid",
     "paid": true,
     "scope": "interpret",
-    "targetKey": "<cacheKey>",
+    "targetKey": "ziwei:v1:1992-06-15:6:male:default:split",
     "accessToken": "<hs256-jwt>",
     "provider": "yookassa",
     "createdAt": "2026-11-15T10:30:00.000Z",
     "paidAt": "2026-11-15T10:31:00.000Z"
   }
   ```
-- Errors: `400 INVALID_INPUT` (missing `orderId`), `404 NOT_FOUND` (unknown order), `503 TOKEN_UNCONFIGURED`.
+- Errors: `400 INVALID_INPUT` (missing `orderId`), `401 UNAUTHORIZED` (missing or invalid `orderToken`), `404 NOT_FOUND` (unknown `orderId` when authorized), `503 TOKEN_UNCONFIGURED`.
 
 ---
 
 ### 6. `POST /api/interpret` (Paid SSE Stream)
 
-Streams full AI chart interpretations in `text/event-stream` format using language-specific system prompts (`lib/server/llm.ts`) and two-layer language-isolated caching (Redis + PostgreSQL).
+Streams full AI chart interpretations in `text/event-stream` format using language-specific system prompts (`lib/server/llm.ts`) and two-layer language- & year-isolated caching (Redis + PostgreSQL).
 
-**Headers**: optional `Authorization: Bearer <accessToken>` (takes precedence over body `accessToken`).
+- **Headers**: in `AI_PAYWALL_MODE=strict`, requires `Authorization: Bearer <accessToken>` (or JSON body `accessToken`).
+- **Body limit**: `128 KiB` (`413 PAYLOAD_TOO_LARGE` when exceeded).
 
 **Request**
 
@@ -297,15 +338,19 @@ Streams full AI chart interpretations in `text/event-stream` format using langua
 **Responses**
 
 - `200 OK`: `Content-Type: text/event-stream; charset=utf-8`, `X-Cache: HIT | MISS`.
-- `402 Payment Required`: `{ "error": "payment_required", "code": "PAYWALL_LOCKED", "cacheKey": "<chartKey>" }` (triggered when `AI_PAYWALL_MODE=strict` and neither valid token nor paid order exists).
+- `400 INVALID_INPUT` / `BAD_REQUEST` (including invalid `chart.birthInfo.timeZone`).
+- `402 Payment Required`: `{ "error": "payment_required", "code": "PAYWALL_LOCKED", "cacheKey": "<chartKey>", "entitlementKey": "<baseChartKey>" }`.
+- `413 PAYLOAD_TOO_LARGE`: body exceeds `128 KiB`.
 - `429 Too Many Requests`: `{ "error": "rate_limit_exceeded", "code": "RATE_LIMITED" }` + `Retry-After` header.
-- `502 LLM_UPSTREAM_ERROR` / `503 LLM_UNCONFIGURED` / `400 INVALID_INPUT`.
+- `502 LLM_UPSTREAM_ERROR` / `503 LLM_CONFIG_ERROR`.
 
 ---
 
 ### 7. `POST /api/heming` (Preview Zero-LLM or Paid SSE Synastry)
 
 Computes two-person synastry (`analyzeSynastry`) and either returns a Zero-LLM teaser preview (`previewOnly: true`) or streams a localized AI compatibility reading (`text/event-stream`).
+
+- **Body limit**: `128 KiB` (`413 PAYLOAD_TOO_LARGE` when exceeded).
 
 **Request**
 
@@ -328,15 +373,37 @@ Computes two-person synastry (`analyzeSynastry`) and either returns a Zero-LLM t
   {
     "ok": true,
     "lang": "ru",
-    "pairKey": "<pairKey>",
+    "pairKey": "heming:v1:<32-hex>:y2026",
+    "entitlementKey": "heming:v1:<32-hex>",
     "synastry": { "...": "SynastryResult" },
     "overview": "...",
     "teasers": { "...": "SynastryPaywallResult" }
   }
   ```
-- Paid mode (`previewOnly` omitted or `false`):
+- Paid mode (`previewOnly` omitted or `false`, requires valid `accessToken` in `AI_PAYWALL_MODE=strict`):
   - `200 OK`: `Content-Type: text/event-stream; charset=utf-8`, `X-Cache: HIT | MISS`.
-  - `402 Payment Required`: `{ "error": "payment_required", "code": "PAYWALL_LOCKED", "pairKey": "<pairKey>" }`.
+  - `400 INVALID_INPUT` / `BAD_REQUEST` (including invalid `chartA/chartB.birthInfo.timeZone`).
+  - `402 Payment Required`: `{ "error": "payment_required", "code": "PAYWALL_LOCKED", "pairKey": "<pairKey>", "entitlementKey": "<basePairKey>" }`.
+  - `413 PAYLOAD_TOO_LARGE` / `429 RATE_LIMITED` / `502 LLM_UPSTREAM_ERROR` / `503 LLM_CONFIG_ERROR`.
+
+---
+
+## Error Code Reference (`503` & Security Status Codes)
+
+| Status | Endpoint(s) | `code` | `error` | Meaning |
+|---|---|---|---|---|
+| `400` | All POST/order | `BAD_REQUEST` / `INVALID_INPUT` | `invalid_*` / `missing_order_id` | Malformed JSON/body, invalid date/zone (`tz=Not/AZone`), or non-positive checkout amount |
+| `401` | `/api/billing/webhook`, `/api/billing/order` | `UNAUTHORIZED` | `invalid_signature` / `unauthorized` / `invalid_order_token` | Missing/bad webhook HMAC or missing/bad `orderToken` |
+| `402` | `/api/interpret`, `/api/heming` | `PAYWALL_LOCKED` | `payment_required` | Missing, expired, wrong-scope, or mismatched `accessToken` |
+| `403` | All `OPTIONS` | `CORS_FORBIDDEN` | `cors_origin_denied` | Disallowed `Origin` header on preflight |
+| `404` | `/api/billing/order` | `NOT_FOUND` | `order_not_found` | Order not found (checked only after `orderToken` is supplied) |
+| `413` | All `POST` | `PAYLOAD_TOO_LARGE` | `payload_too_large` | Body exceeds `128 KiB` (`/chart`, `/interpret`, `/heming`) or `32 KiB` (`/billing/*`) |
+| `429` | `/chart`, `/interpret`, `/heming` | `RATE_LIMITED` | `rate_limit_exceeded` | Per-IP rate limit exceeded (`Retry-After` set) |
+| `502` | `/interpret`, `/heming` | `LLM_UPSTREAM_ERROR` | `llm_upstream_error` | Upstream LLM provider error |
+| `503` | `/interpret`, `/heming` | `LLM_CONFIG_ERROR` | `llm_not_configured` | Missing/invalid AI provider API key, model, or base URL |
+| `503` | `/billing/checkout` | `BILLING_UNCONFIGURED` | `billing_checkout_unconfigured` | Invalid `BILLING_CHECKOUT_BASE_URL` / `APP_PUBLIC_URL` configuration |
+| `503` | `/billing/order`, `/billing/webhook` | `TOKEN_UNCONFIGURED` | `access_token_not_configured` | Missing `ACCESS_TOKEN_SECRET` |
+| `503` | `/billing/webhook` | `WEBHOOK_UNCONFIGURED` | `webhook_not_configured` | Missing `PAYWALL_WEBHOOK_SECRET` |
 
 ---
 
@@ -345,9 +412,9 @@ Computes two-person synastry (`analyzeSynastry`) and either returns a Zero-LLM t
 Apply `db/schema.sql` against PostgreSQL before enabling `DATABASE_URL`:
 
 - `webhook_events` (`event_id`, `provider`, `order_id`, `processed_at`) — webhook replay idempotency.
-- `orders` (`order_id`, `scope`, `target_key`, `status`, `amount_minor`, `currency`, `provider`, `checkout_url`, `meta`, `created_at`, `paid_at`, `updated_at`) — billing order lifecycle (`pending` -> `paid`).
-- `chart_interpretations` (`PRIMARY KEY (cache_key, topic_key)`) — natal LLM cache (`topic_key` is unprefixed for `zh` and `<lang>:<topicKey>` for `ru`/`en`).
-- `synastry_interpretations` (`PRIMARY KEY (pair_key, question_hash)`) — synastry LLM cache (`question_hash` is unprefixed for `zh` and `<lang>:<hash>` for `ru`/`en`).
+- `orders` (`order_id`, `scope`, `target_key`, `status`, `amount_minor`, `currency`, `provider`, `checkout_url`, `claim_token_hash`, `meta`, `created_at`, `paid_at`, `updated_at`) — billing order lifecycle (`pending` -> `paid`) with hashed capability token verification.
+- `chart_interpretations` (`PRIMARY KEY (cache_key, topic_key)`) — natal LLM cache (`cache_key` carries optional `:y<targetYear>`, `topic_key` is unprefixed for `zh` and `<lang>:<topicKey>` for `ru`/`en`).
+- `synastry_interpretations` (`PRIMARY KEY (pair_key, question_hash)`) — synastry LLM cache (`pair_key` carries optional `:y<targetYear>`, `question_hash` is unprefixed for `zh` and `<lang>:<hash>` for `ru`/`en`).
 
 ---
 
@@ -359,7 +426,11 @@ All modules in `lib/ziwei/` run directly in Node/`tsx` without Next.js or `serve
 import { generateChart } from './lib/ziwei/algorithm';
 import { findCityByQuery } from './lib/ziwei/cities';
 import { detectPatterns } from './lib/ziwei/patterns';
-import { analyzeChartSummary, getChartCacheKey } from './lib/ziwei/chart-analyzer';
+import {
+  analyzeChartSummary,
+  getChartCacheKey,
+  getChartEntitlementKey,
+} from './lib/ziwei/chart-analyzer';
 import { generateChartTeasers } from './lib/ziwei/paywall-teasers';
 import { translateChartSummary } from './lib/ziwei/i18n';
 
@@ -381,5 +452,6 @@ const summary = analyzeChartSummary(chart, { targetYear: 2026 });
 const patterns = detectPatterns(chart);
 const teasers = generateChartTeasers(chart, summary, patterns, 'ru');
 const localized = translateChartSummary(chart, summary, patterns, 'ru');
-const chartKey = getChartCacheKey(chart, { targetYear: 2026 });
+const cacheKey = getChartCacheKey(chart, { targetYear: 2026 });       // ziwei:v1:...:y2026
+const entitlementKey = getChartEntitlementKey(chart);                  // ziwei:v1:...
 ```

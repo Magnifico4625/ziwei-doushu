@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS orders (
   currency TEXT,
   provider TEXT,
   checkout_url TEXT,
+  claim_token_hash TEXT,
   meta JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   paid_at TIMESTAMPTZ,
@@ -26,6 +27,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS checkout_url TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS claim_token_hash TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_orders_scope_target_status

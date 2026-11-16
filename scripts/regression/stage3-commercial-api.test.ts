@@ -25,6 +25,7 @@ import { detectPatterns } from '../../lib/ziwei/patterns';
 import type { BirthFormState, ZiweiChart } from '../../lib/ziwei/types';
 import { resetServerConfigForTests } from '../../lib/server/env';
 import { signWebhookSignature, verifyAccessToken } from '../../lib/server/access-token';
+import { MAX_CHART_BODY_BYTES } from '../../lib/server/request-body';
 import { resetMemoryRateLimiterForTests } from '../../lib/server/rate-limit';
 import { resetInMemoryDbForTests } from '../../lib/server/db';
 import {
@@ -416,6 +417,7 @@ async function main(): Promise<void> {
           const checkoutJson = (await checkoutRes.json()) as {
             ok: boolean;
             orderId: string;
+            orderToken: string;
             status: string;
             provider: string;
             scope: string;
@@ -429,20 +431,44 @@ async function main(): Promise<void> {
           assert.equal(checkoutJson.scope, 'interpret');
           assert.equal(checkoutJson.targetKey, expectedChartKey);
           assert.ok(checkoutJson.orderId.startsWith('ord_'));
+          assert.ok(checkoutJson.orderToken.length >= 24);
           assert.ok(checkoutJson.checkoutUrl.includes(checkoutJson.orderId));
+          assert.equal(checkoutJson.checkoutUrl.includes(checkoutJson.orderToken), false, 'checkoutUrl must not leak orderToken');
 
-          // Missing & unknown order poll -> 400 / 404
+          // Unauthenticated & wrong-token order poll -> 401 BEFORE revealing paid status or token
+          const unauthOrderRes = await orderGET(
+            new Request(`http://localhost/api/billing/order?orderId=${checkoutJson.orderId}`, {
+              headers: { Origin: allowedOrigin },
+            }),
+          );
+          assert.equal(unauthOrderRes.status, 401);
+          assert.equal(unauthOrderRes.headers.get('access-control-allow-origin'), allowedOrigin);
+
+          // Missing & unknown order poll (even with header token) -> 400 / 404
           const missingOrderRes = await orderGET(new Request('http://localhost/api/billing/order'));
           assert.equal(missingOrderRes.status, 400);
           const unknownOrderRes = await orderGET(
-            new Request('http://localhost/api/billing/order?orderId=ord_does_not_exist'),
+            new Request('http://localhost/api/billing/order?orderId=ord_does_not_exist', {
+              headers: { Authorization: `Bearer ${checkoutJson.orderToken}` },
+            }),
           );
           assert.equal(unknownOrderRes.status, 404);
 
-          // Pre-payment poll -> paid: false, MUST NOT leak accessToken
+          // Wrong orderToken rejected -> 401
+          const badTokenOrderRes = await orderGET(
+            new Request(`http://localhost/api/billing/order?orderId=${checkoutJson.orderId}`, {
+              headers: { Authorization: 'Bearer wrong-order-token' },
+            }),
+          );
+          assert.equal(badTokenOrderRes.status, 401);
+
+          // Pre-payment poll with orderToken -> paid: false, MUST NOT leak accessToken
           const prePollRes = await orderGET(
             new Request(`http://localhost/api/billing/order?orderId=${checkoutJson.orderId}`, {
-              headers: { Origin: allowedOrigin },
+              headers: {
+                Origin: allowedOrigin,
+                Authorization: `Bearer ${checkoutJson.orderToken}`,
+              },
             }),
           );
           assert.equal(prePollRes.status, 200);
@@ -494,10 +520,25 @@ async function main(): Promise<void> {
           assert.equal(webhookRes.status, 200);
           assert.equal(webhookRes.headers.get('access-control-allow-origin'), allowedOrigin);
 
-          // Post-payment order poll -> paid: true + valid accessToken
+          // Post-payment order poll WITHOUT orderToken or WRONG orderToken MUST remain rejected (401)
+          const postUnauthPoll = await orderGET(
+            new Request(`http://localhost/api/billing/order?orderId=${checkoutJson.orderId}`),
+          );
+          assert.equal(postUnauthPoll.status, 401);
+          const postBadTokenPoll = await orderGET(
+            new Request(`http://localhost/api/billing/order?orderId=${checkoutJson.orderId}`, {
+              headers: { 'x-order-token': 'forged-token' },
+            }),
+          );
+          assert.equal(postBadTokenPoll.status, 401);
+
+          // Post-payment order poll WITH valid orderToken -> paid: true + valid accessToken
           const postPollRes = await orderGET(
             new Request(`http://localhost/api/billing/order?orderId=${checkoutJson.orderId}`, {
-              headers: { Origin: allowedOrigin },
+              headers: {
+                Origin: allowedOrigin,
+                Authorization: `Bearer ${checkoutJson.orderToken}`,
+              },
             }),
           );
           assert.equal(postPollRes.status, 200);
@@ -588,20 +629,69 @@ async function main(): Promise<void> {
           assert.equal(lastLang, 'en');
           assert.ok(lastSystemPrompt.includes('Zi Wei Dou Shu'));
 
-          // Clear Redis memory cache -> PG fallback still keeps 'ru' vs 'zh' vs 'en' isolated
+          // Clear Redis memory cache: request WITHOUT accessToken MUST be blocked (402), even after payment!
           resetMemoryCacheForTests();
-          const sseRuPgRes = await interpretPOST(
+          const noTokAfterPaid = await interpretPOST(
             makeJsonRequest('http://localhost/api/interpret', {
               chart: chartA,
               messages,
               lang: 'ru',
             }),
           );
+          assert.equal(noTokAfterPaid.status, 402);
+
+          // With valid accessToken, PG fallback still serves isolated 'ru' cache HIT
+          const sseRuPgRes = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret',
+              {
+                chart: chartA,
+                messages,
+                lang: 'ru',
+              },
+              { Authorization: `Bearer ${postPollJson.accessToken}` },
+            ),
+          );
           assert.equal(sseRuPgRes.status, 200);
           const sseRuPg = await readSseResponse(sseRuPgRes);
           assert.equal(sseRuPg.xCache, 'HIT');
           assert.equal(sseRuPg.fullText, sseRu1.fullText);
           assert.equal(llmCallCount, 3);
+
+          // Same purchase (without year) MUST authorize annual interpretation (targetYear: 2026) while keeping cache separate
+          const sseRu2026Res = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret',
+              {
+                chart: chartA,
+                messages,
+                lang: 'ru',
+                targetYear: 2026,
+              },
+              { Authorization: `Bearer ${postPollJson.accessToken}` },
+            ),
+          );
+          assert.equal(sseRu2026Res.status, 200);
+          const sseRu2026 = await readSseResponse(sseRu2026Res);
+          assert.equal(sseRu2026.xCache, 'MISS');
+          assert.equal(llmCallCount, 4);
+
+          const sseRu2026HitRes = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret',
+              {
+                chart: chartA,
+                messages,
+                lang: 'ru',
+                targetYear: 2026,
+              },
+              { Authorization: `Bearer ${postPollJson.accessToken}` },
+            ),
+          );
+          assert.equal(sseRu2026HitRes.status, 200);
+          const sseRu2026Hit = await readSseResponse(sseRu2026HitRes);
+          assert.equal(sseRu2026Hit.xCache, 'HIT');
+          assert.equal(llmCallCount, 4);
         }
 
         // ── 4) /api/heming previewOnly teasers & paid 'ru'/'zh' SSE isolation ─
@@ -665,9 +755,9 @@ async function main(): Promise<void> {
           assert.equal(prevEn.lang, 'en');
           assert.equal(prevEn.teasers.lang, 'en');
           assert.equal(HAN_CHAR_RE.test(prevEn.overview), false);
-          assert.equal(llmCallCount, 3, 'heming previewOnly must make ZERO LLM calls');
+          assert.equal(llmCallCount, 4, 'heming previewOnly must make ZERO LLM calls');
 
-          // Checkout + webhook for heming
+          // Checkout + webhook for heming (passing year-suffixed expectedPairKey yields unified entitlement)
           const hemCheckoutRes = await checkoutPOST(
             makeJsonRequest('http://localhost/api/billing/checkout', {
               scope: 'heming',
@@ -675,7 +765,12 @@ async function main(): Promise<void> {
             }),
           );
           assert.equal(hemCheckoutRes.status, 201);
-          const hemCheckout = (await hemCheckoutRes.json()) as { orderId: string };
+          const hemCheckout = (await hemCheckoutRes.json()) as {
+            orderId: string;
+            orderToken: string;
+            targetKey: string;
+          };
+          assert.equal(hemCheckout.targetKey, canonicalPairKey(chartA, chartB));
 
           const hemWebhookRaw = JSON.stringify({
             eventId: 'evt-stage3-hem-1',
@@ -695,12 +790,15 @@ async function main(): Promise<void> {
             }),
           );
           const hemOrderRes = await orderGET(
-            new Request(`http://localhost/api/billing/order?orderId=${hemCheckout.orderId}`),
+            new Request(`http://localhost/api/billing/order?orderId=${hemCheckout.orderId}`, {
+              headers: { 'x-order-token': hemCheckout.orderToken },
+            }),
           );
+          assert.equal(hemOrderRes.status, 200);
           const hemOrder = (await hemOrderRes.json()) as { paid: boolean; accessToken: string };
           assert.equal(hemOrder.paid, true);
 
-          // Paid Russian heming SSE -> MISS (llmCallCount = 4), repeat -> HIT
+          // Paid Russian heming SSE -> MISS (llmCallCount = 5), repeat -> HIT
           const hemRu1Res = await hemingPOST(
             makeJsonRequest(
               'http://localhost/api/heming',
@@ -712,8 +810,8 @@ async function main(): Promise<void> {
           assert.equal(hemRu1Res.headers.get('access-control-allow-origin'), allowedOrigin);
           const hemRu1 = await readSseResponse(hemRu1Res);
           assert.equal(hemRu1.xCache, 'MISS');
-          assert.ok(hemRu1.fullText.includes('RU-ответ #4'));
-          assert.equal(llmCallCount, 4);
+          assert.ok(hemRu1.fullText.includes('RU-ответ #5'));
+          assert.equal(llmCallCount, 5);
           assert.ok(lastSystemPrompt.includes('синастрии'));
 
           const hemRu2 = await readSseResponse(
@@ -727,7 +825,7 @@ async function main(): Promise<void> {
           );
           assert.equal(hemRu2.xCache, 'HIT');
           assert.equal(hemRu2.fullText, hemRu1.fullText);
-          assert.equal(llmCallCount, 4);
+          assert.equal(llmCallCount, 5);
 
           // Paid Chinese heming SSE with SAME token -> MISS (isolated from 'ru')
           const hemZh1 = await readSseResponse(
@@ -740,24 +838,51 @@ async function main(): Promise<void> {
             ),
           );
           assert.equal(hemZh1.xCache, 'MISS');
-          assert.ok(hemZh1.fullText.includes('ZH-回复 #5'));
-          assert.equal(llmCallCount, 5);
+          assert.ok(hemZh1.fullText.includes('ZH-回复 #6'));
+          assert.equal(llmCallCount, 6);
 
-          // Clear Redis -> PG fallback preserves Russian vs Chinese isolation
+          // Same year-2026 synastry purchase also covers timeless /api/heming (no targetYear) -> MISS
+          const hemTimeless = await readSseResponse(
+            await hemingPOST(
+              makeJsonRequest(
+                'http://localhost/api/heming',
+                { chartA, chartB, lang: 'ru' },
+                { Authorization: `Bearer ${hemOrder.accessToken}` },
+              ),
+            ),
+          );
+          assert.equal(hemTimeless.xCache, 'MISS');
+          assert.equal(llmCallCount, 7);
+
+          // Clear Redis -> missing token rejected (402); valid token hits PG cache
           resetMemoryCacheForTests();
+          const hemNoTokAfterPaid = await hemingPOST(
+            makeJsonRequest('http://localhost/api/heming', {
+              chartA,
+              chartB,
+              targetYear: 2026,
+              lang: 'ru',
+            }),
+          );
+          assert.equal(hemNoTokAfterPaid.status, 402);
+
           const hemRuPg = await readSseResponse(
             await hemingPOST(
-              makeJsonRequest('http://localhost/api/heming', {
-                chartA,
-                chartB,
-                targetYear: 2026,
-                lang: 'ru',
-              }),
+              makeJsonRequest(
+                'http://localhost/api/heming',
+                {
+                  chartA,
+                  chartB,
+                  targetYear: 2026,
+                  lang: 'ru',
+                },
+                { Authorization: `Bearer ${hemOrder.accessToken}` },
+              ),
             ),
           );
           assert.equal(hemRuPg.xCache, 'HIT');
           assert.equal(hemRuPg.fullText, hemRu1.fullText);
-          assert.equal(llmCallCount, 5);
+          assert.equal(llmCallCount, 7);
 
           // /api/chart synastry check respects language isolation of cached interpretation
           const synCheckRu = (await (
@@ -869,6 +994,219 @@ async function main(): Promise<void> {
             assert.equal(wildcardGet.status, 200);
             assert.equal(wildcardGet.headers.get('access-control-allow-origin'), '*');
           });
+        }
+
+        // ── 6) Security hardening, year-agnostic purchase, tz=Not/AZone, 413, amount<=0 ─
+        {
+          // 6a) Checkout rejects zero / negative amounts (P3)
+          for (const badAmountBody of [
+            { scope: 'interpret', chartKey: expectedChartKey, amountMinor: 0 },
+            { scope: 'interpret', chartKey: expectedChartKey, amount: 0 },
+            { scope: 'interpret', chartKey: expectedChartKey, amount: 0.001 },
+            { scope: 'interpret', chartKey: expectedChartKey, amountMinor: -100 },
+          ]) {
+            const badAmtRes = await checkoutPOST(
+              makeJsonRequest('http://localhost/api/billing/checkout', badAmountBody),
+            );
+            assert.equal(badAmtRes.status, 400, `Checkout must reject ${JSON.stringify(badAmountBody)}`);
+          }
+
+          // 6b) Buying with :y2026 key grants access both WITHOUT year and for another year (2027) (P2 #1)
+          const chartBKey2026 = getChartCacheKey(chartB, { targetYear: 2026 });
+          const chartBBaseKey = getChartCacheKey(chartB);
+          assert.ok(chartBKey2026.endsWith(':y2026'));
+
+          const bCheckoutRes = await checkoutPOST(
+            makeJsonRequest('http://localhost/api/billing/checkout', {
+              scope: 'interpret',
+              chartKey: chartBKey2026,
+              amountMinor: 59000,
+              currency: 'RUB',
+            }),
+          );
+          assert.equal(bCheckoutRes.status, 201);
+          const bCheckout = (await bCheckoutRes.json()) as {
+            orderId: string;
+            orderToken: string;
+            targetKey: string;
+          };
+          assert.equal(bCheckout.targetKey, chartBBaseKey);
+
+          const bWebhookRaw = JSON.stringify({
+            eventId: 'evt-year-purchase-1',
+            orderId: bCheckout.orderId,
+            scope: 'interpret',
+            targetKey: chartBKey2026,
+            status: 'paid',
+          });
+          await webhookPOST(
+            new Request('http://localhost/api/billing/webhook', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-webhook-signature': `sha256=${signWebhookSignature(bWebhookRaw, testWebhookSecret)}`,
+              },
+              body: bWebhookRaw,
+            }),
+          );
+          const bOrderRes = await orderGET(
+            new Request(`http://localhost/api/billing/order?orderId=${bCheckout.orderId}`, {
+              headers: { Authorization: `Bearer ${bCheckout.orderToken}` },
+            }),
+          );
+          assert.equal(bOrderRes.status, 200);
+          const bOrder = (await bOrderRes.json()) as { accessToken: string };
+
+          // Valid on timeless /api/interpret AND targetYear: 2027, while no-token gets 402
+          const bNoTok = await interpretPOST(
+            makeJsonRequest('http://localhost/api/interpret', {
+              chart: chartB,
+              messages: [{ role: 'user', content: 'Разбор' }],
+              lang: 'ru',
+            }),
+          );
+          assert.equal(bNoTok.status, 402);
+
+          const bTimelessOk = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret',
+              { chart: chartB, messages: [{ role: 'user', content: 'Разбор' }], lang: 'ru' },
+              { Authorization: `Bearer ${bOrder.accessToken}` },
+            ),
+          );
+          assert.equal(bTimelessOk.status, 200);
+          await readSseResponse(bTimelessOk);
+
+          const b2027Ok = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret',
+              {
+                chart: chartB,
+                messages: [{ role: 'user', content: 'Разбор' }],
+                targetYear: 2027,
+                lang: 'ru',
+              },
+              { Authorization: `Bearer ${bOrder.accessToken}` },
+            ),
+          );
+          assert.equal(b2027Ok.status, 200);
+          const b2027Sse = await readSseResponse(b2027Ok);
+          assert.equal(b2027Sse.xCache, 'MISS');
+
+          // 6c) Invalid timeZone / tz returns 400 (NEVER silently ignored) (P2 #3)
+          const validBirth = { year: 1990, month: 5, day: 15, hour: 4, gender: 'male' };
+          for (const [label, url, payload] of [
+            ['query tz', 'http://localhost/api/chart?tz=Not/AZone', { birthInfo: validBirth }],
+            ['query timeZone', 'http://localhost/api/chart?timeZone=Not/AZone', { birthInfo: validBirth }],
+            ['body tz', 'http://localhost/api/chart', { birthInfo: validBirth, tz: 'Not/AZone' }],
+            [
+              'birthInfo.timeZone',
+              'http://localhost/api/chart',
+              { birthInfo: { ...validBirth, timeZone: 'Not/AZone' } },
+            ],
+            [
+              'birthInfo.tz',
+              'http://localhost/api/chart',
+              { birthInfo: { ...validBirth, tz: 'Not/AZone' } },
+            ],
+            [
+              'form.timeZone',
+              'http://localhost/api/chart',
+              {
+                form: {
+                  year: '1990',
+                  month: '5',
+                  day: '15',
+                  clockHour: '8',
+                  clockMinute: '0',
+                  gender: 'male',
+                  timeZone: 'Not/AZone',
+                },
+              },
+            ],
+            [
+              'form.tz with valid city',
+              'http://localhost/api/chart',
+              {
+                form: {
+                  year: '1990',
+                  month: '5',
+                  day: '15',
+                  clockHour: '8',
+                  clockMinute: '0',
+                  gender: 'male',
+                  city: 'Москва',
+                  tz: 'Not/AZone',
+                },
+              },
+            ],
+          ] as const) {
+            const badTzRes = await chartPOST(makeJsonRequest(url, payload));
+            assert.equal(badTzRes.status, 400, `Expected 400 for invalid zone case: ${label}`);
+          }
+
+          // Valid query ?tz=Europe/Moscow accepted
+          const validTzRes = await chartPOST(
+            makeJsonRequest('http://localhost/api/chart?tz=Europe/Moscow', {
+              birthInfo: validBirth,
+              lang: 'ru',
+            }),
+          );
+          assert.equal(validTzRes.status, 200);
+
+          // Invalid timeZone rejected in /api/interpret and /api/heming too
+          const badChartForAi: ZiweiChart = {
+            ...chartA,
+            birthInfo: { ...chartA.birthInfo, timeZone: 'Not/AZone' },
+          };
+          const badIntTzRes = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret',
+              { chart: badChartForAi, messages: [{ role: 'user', content: 'test' }] },
+              { Authorization: `Bearer ${bOrder.accessToken}` },
+            ),
+          );
+          assert.equal(badIntTzRes.status, 400);
+
+          // 6d) /api/chart enforces request body size limit -> 413 PAYLOAD_TOO_LARGE (P3 #1)
+          const hugePad = 'x'.repeat(MAX_CHART_BODY_BYTES + 1024);
+          const oversizedReq = new Request('http://localhost/api/chart', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Origin: allowedOrigin,
+            },
+            body: JSON.stringify({ birthInfo: { ...validBirth, name: hugePad } }),
+          });
+          const oversizedRes = await chartPOST(oversizedReq);
+          assert.equal(oversizedRes.status, 413);
+          assert.equal(oversizedRes.headers.get('access-control-allow-origin'), allowedOrigin);
+          const oversizedJson = (await oversizedRes.json()) as { code: string };
+          assert.equal(oversizedJson.code, 'PAYLOAD_TOO_LARGE');
+
+          // Also verify streaming request WITHOUT Content-Length header hits 413
+          const streamChunks = [
+            '{"birthInfo":{"year":1990,"month":5,"day":15,"hour":4,"gender":"male","name":"',
+            'a'.repeat(MAX_CHART_BODY_BYTES),
+            '"}}',
+          ];
+          const chunkStream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const enc = new TextEncoder();
+              for (const c of streamChunks) {
+                controller.enqueue(enc.encode(c));
+              }
+              controller.close();
+            },
+          });
+          const streamOversizedReq = new Request('http://localhost/api/chart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: chunkStream,
+            duplex: 'half',
+          } as RequestInit & { duplex: 'half' });
+          const streamOversizedRes = await chartPOST(streamOversizedReq);
+          assert.equal(streamOversizedRes.status, 413);
         }
       } finally {
         setLlmStreamAdapterForTests(null);

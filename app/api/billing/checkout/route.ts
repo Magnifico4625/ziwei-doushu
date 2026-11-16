@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { getServerEnv } from '@/lib/server/env';
-import type { EntitlementScope } from '@/lib/server/access-token';
+import {
+  generateOrderToken,
+  hashOrderToken,
+  type EntitlementScope,
+} from '@/lib/server/access-token';
 import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { createPendingOrder } from '@/lib/server/db';
+import { MAX_BILLING_BODY_BYTES, readJsonBodyWithLimit } from '@/lib/server/request-body';
+import { stripYearSuffixFromKey } from '@/lib/ziwei/chart-analyzer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -116,16 +122,11 @@ export async function OPTIONS(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  let rawBody: unknown;
-  try {
-    rawBody = await req.json();
-  } catch {
-    return jsonError(req, 400, 'invalid_json', 'BAD_REQUEST', 'Request body must be valid JSON.');
+  const bodyResult = await readJsonBodyWithLimit(req, MAX_BILLING_BODY_BYTES);
+  if (!bodyResult.ok) {
+    return jsonError(req, bodyResult.status, bodyResult.error, bodyResult.code, bodyResult.message);
   }
-
-  if (!isPlainRecord(rawBody)) {
-    return jsonError(req, 400, 'invalid_body', 'BAD_REQUEST', 'Request body must be a JSON object.');
-  }
+  const rawBody = bodyResult.value;
 
   const scope = rawBody.scope;
   if (!isEntitlementScope(scope)) {
@@ -142,7 +143,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!targetResult.ok) {
     return jsonError(req, 400, 'invalid_target_key', 'INVALID_INPUT', targetResult.message);
   }
-  const targetKey = targetResult.value;
+  const targetKey = stripYearSuffixFromKey(targetResult.value);
   if (targetKey.length > 512) {
     return jsonError(req, 400, 'invalid_target_key', 'INVALID_INPUT', 'targetKey exceeds maximum length.');
   }
@@ -172,14 +173,14 @@ export async function POST(req: Request): Promise<Response> {
     if (
       typeof rawBody.amountMinor !== 'number' ||
       !Number.isInteger(rawBody.amountMinor) ||
-      rawBody.amountMinor < 0
+      rawBody.amountMinor <= 0
     ) {
       return jsonError(
         req,
         400,
         'invalid_amount',
         'INVALID_INPUT',
-        'amountMinor must be a non-negative integer.',
+        'amountMinor must be a positive integer.',
       );
     }
     amountMinor = rawBody.amountMinor;
@@ -187,19 +188,29 @@ export async function POST(req: Request): Promise<Response> {
     if (
       typeof rawBody.amount !== 'number' ||
       !Number.isFinite(rawBody.amount) ||
-      rawBody.amount < 0
+      rawBody.amount <= 0
     ) {
       return jsonError(
         req,
         400,
         'invalid_amount',
         'INVALID_INPUT',
-        'amount must be a non-negative finite number.',
+        'amount must be a positive finite number.',
       );
     }
-    amountMinor = Number.isInteger(rawBody.amount)
+    const converted = Number.isInteger(rawBody.amount)
       ? rawBody.amount
       : Math.round(rawBody.amount * 100);
+    if (!Number.isSafeInteger(converted) || converted <= 0) {
+      return jsonError(
+        req,
+        400,
+        'invalid_amount',
+        'INVALID_INPUT',
+        'amount must resolve to a positive integer minor amount.',
+      );
+    }
+    amountMinor = converted;
   }
 
   let returnUrl: string | undefined;
@@ -231,6 +242,8 @@ export async function POST(req: Request): Promise<Response> {
   const checkoutBase =
     cfg.billingCheckoutBaseUrl ?? `${cfg.appPublicUrl.replace(/\/+$/, '')}/checkout`;
   const orderId = `ord_${randomUUID().replace(/-/g, '')}`;
+  const orderToken = generateOrderToken();
+  const claimTokenHash = hashOrderToken(orderToken);
 
   let checkoutUrl: string;
   try {
@@ -260,6 +273,7 @@ export async function POST(req: Request): Promise<Response> {
     currency,
     provider,
     checkoutUrl,
+    claimTokenHash,
     meta,
   });
 
@@ -269,6 +283,7 @@ export async function POST(req: Request): Promise<Response> {
       {
         ok: true,
         orderId: order.orderId,
+        orderToken,
         status: order.status,
         provider: order.provider ?? provider,
         scope: order.scope,
