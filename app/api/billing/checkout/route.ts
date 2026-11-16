@@ -8,7 +8,7 @@ import {
 import { handleCorsPreflight, withCors } from '@/lib/server/cors';
 import { createPendingOrder } from '@/lib/server/db';
 import { MAX_BILLING_BODY_BYTES, readJsonBodyWithLimit } from '@/lib/server/request-body';
-import { stripYearSuffixFromKey } from '@/lib/ziwei/chart-analyzer';
+import { normalizeEntitlementKey } from '@/lib/ziwei/chart-analyzer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -143,7 +143,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!targetResult.ok) {
     return jsonError(req, 400, 'invalid_target_key', 'INVALID_INPUT', targetResult.message);
   }
-  const targetKey = stripYearSuffixFromKey(targetResult.value);
+  const targetKey = normalizeEntitlementKey(targetResult.value);
   if (targetKey.length > 512) {
     return jsonError(req, 400, 'invalid_target_key', 'INVALID_INPUT', 'targetKey exceeds maximum length.');
   }
