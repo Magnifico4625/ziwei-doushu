@@ -8,7 +8,7 @@ import {
 import { MAX_CHART_BODY_BYTES, readJsonBodyWithLimit } from '@/lib/server/request-body';
 import {
   parseIanaTimeZoneField,
-  parseQueryTimezoneParams,
+  parseRequestTimezoneOverride,
   parseTzAliasField,
   type ParsedTzAlias,
 } from '@/lib/server/timezone-input';
@@ -229,9 +229,7 @@ function parseBirthInfo(
     }
   }
 
-  const parsedTimeZone = parseIanaTimeZoneField(raw.timeZone, 'birthInfo.timeZone', {
-    allowEmptyString: false,
-  });
+  const parsedTimeZone = parseIanaTimeZoneField(raw.timeZone, 'birthInfo.timeZone');
   if (!parsedTimeZone.ok) {
     return parsedTimeZone;
   }
@@ -344,9 +342,7 @@ function parseBirthForm(
     }
   }
 
-  const parsedTimeZone = parseIanaTimeZoneField(raw.timeZone, 'form.timeZone', {
-    allowEmptyString: true,
-  });
+  const parsedTimeZone = parseIanaTimeZoneField(raw.timeZone, 'form.timeZone');
   if (!parsedTimeZone.ok) {
     return parsedTimeZone;
   }
@@ -360,10 +356,13 @@ function parseBirthForm(
   const loc = resolveCityLocation(rawProvince, rawCity, lang);
 
   const longitude = typeof raw.longitude === 'number' ? raw.longitude : (loc.longitude ?? 120);
+  const hasExplicitUtcOffset =
+    typeof raw.utcOffsetMinutes === 'number' || parsedTzAlias.value.utcOffsetMinutes !== undefined;
   const timeZone =
-    parsedTimeZone.value !== undefined
-      ? parsedTimeZone.value
-      : parsedTzAlias.value.timeZone ?? fallbackZone.timeZone ?? loc.timeZone;
+    parsedTimeZone.value ??
+    parsedTzAlias.value.timeZone ??
+    fallbackZone.timeZone ??
+    (hasExplicitUtcOffset ? undefined : loc.timeZone);
   const utcOffsetMinutes =
     typeof raw.utcOffsetMinutes === 'number'
       ? raw.utcOffsetMinutes
@@ -516,25 +515,11 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const queryZoneParsed = parseQueryTimezoneParams(req);
-  if (!queryZoneParsed.ok) {
-    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', queryZoneParsed.message);
+  const requestZoneParsed = parseRequestTimezoneOverride(req, rawBody);
+  if (!requestZoneParsed.ok) {
+    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', requestZoneParsed.message);
   }
-  const bodyTzParsed = parseTzAliasField(rawBody.tz, 'tz');
-  if (!bodyTzParsed.ok) {
-    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', bodyTzParsed.message);
-  }
-  const bodyTimeZoneParsed = parseIanaTimeZoneField(rawBody.timeZone, 'timeZone', {
-    allowEmptyString: false,
-  });
-  if (!bodyTimeZoneParsed.ok) {
-    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', bodyTimeZoneParsed.message);
-  }
-  const fallbackZone: ParsedTzAlias = {
-    ...queryZoneParsed.value,
-    ...bodyTzParsed.value,
-    ...(bodyTimeZoneParsed.value !== undefined ? { timeZone: bodyTimeZoneParsed.value } : {}),
-  };
+  const fallbackZone: ParsedTzAlias = requestZoneParsed.value;
 
   const langParsed = parseLang(rawBody.lang);
   if (!langParsed.ok) {

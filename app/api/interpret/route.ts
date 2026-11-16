@@ -7,7 +7,11 @@ import {
   type RateLimitRedisClient,
 } from '@/lib/server/rate-limit';
 import { MAX_AI_BODY_BYTES, readJsonBodyWithLimit } from '@/lib/server/request-body';
-import { parseIanaTimeZoneField } from '@/lib/server/timezone-input';
+import {
+  parseIanaTimeZoneField,
+  parseRequestTimezoneOverride,
+  parseTzAliasField,
+} from '@/lib/server/timezone-input';
 import {
   getChartInterpretation,
   saveChartInterpretation,
@@ -135,10 +139,16 @@ function parseChart(raw: unknown): ParseResult<ZiweiChart> {
   const parsedTimeZone = parseIanaTimeZoneField(
     raw.birthInfo.timeZone,
     'chart.birthInfo.timeZone',
-    { allowEmptyString: false },
   );
   if (!parsedTimeZone.ok) {
     return parsedTimeZone;
+  }
+  const parsedTzAlias = parseTzAliasField(
+    (raw.birthInfo as Record<string, unknown>).tz,
+    'chart.birthInfo.tz',
+  );
+  if (!parsedTzAlias.ok) {
+    return parsedTzAlias;
   }
   if (!isPlainRecord(raw.lunarInfo)) {
     return { ok: false, message: 'chart.lunarInfo is required' };
@@ -257,6 +267,10 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  const requestZoneParsed = parseRequestTimezoneOverride(req, rawBody);
+  if (!requestZoneParsed.ok) {
+    return jsonError(req, 400, 'invalid_timezone', 'INVALID_INPUT', requestZoneParsed.message);
+  }
   const langParsed = parseLang(rawBody.lang);
   if (!langParsed.ok) {
     return jsonError(req, 400, 'invalid_lang', 'INVALID_INPUT', langParsed.message);

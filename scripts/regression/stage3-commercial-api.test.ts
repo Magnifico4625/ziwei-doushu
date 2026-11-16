@@ -393,6 +393,7 @@ async function main(): Promise<void> {
             makeJsonRequest('http://localhost/api/billing/checkout', {
               scope: 'interpret',
               chartKey: expectedChartKey,
+              amountMinor: 49900,
               returnUrl: 'javascript:alert(1)',
             }),
           );
@@ -444,7 +445,7 @@ async function main(): Promise<void> {
           assert.equal(unauthOrderRes.status, 401);
           assert.equal(unauthOrderRes.headers.get('access-control-allow-origin'), allowedOrigin);
 
-          // Missing & unknown order poll (even with header token) -> 400 / 404
+          // Missing orderId -> 400; unknown orderId & wrong orderToken -> identical 401 (no ID enumeration)
           const missingOrderRes = await orderGET(new Request('http://localhost/api/billing/order'));
           assert.equal(missingOrderRes.status, 400);
           const unknownOrderRes = await orderGET(
@@ -452,15 +453,30 @@ async function main(): Promise<void> {
               headers: { Authorization: `Bearer ${checkoutJson.orderToken}` },
             }),
           );
-          assert.equal(unknownOrderRes.status, 404);
+          assert.equal(unknownOrderRes.status, 401);
+          const unknownOrderGarbageRes = await orderGET(
+            new Request('http://localhost/api/billing/order?orderId=ord_does_not_exist', {
+              headers: { Authorization: 'Bearer garbage-token' },
+            }),
+          );
+          assert.equal(unknownOrderGarbageRes.status, 401);
 
-          // Wrong orderToken rejected -> 401
+          // Wrong orderToken for existing order -> identical 401 payload
           const badTokenOrderRes = await orderGET(
             new Request(`http://localhost/api/billing/order?orderId=${checkoutJson.orderId}`, {
               headers: { Authorization: 'Bearer wrong-order-token' },
             }),
           );
           assert.equal(badTokenOrderRes.status, 401);
+          assert.deepEqual(await unknownOrderGarbageRes.json(), await badTokenOrderRes.json());
+
+          // Query ?orderToken= MUST NOT be accepted (prevents URL/log token leakage)
+          const queryTokenRejected = await orderGET(
+            new Request(
+              `http://localhost/api/billing/order?orderId=${checkoutJson.orderId}&orderToken=${encodeURIComponent(checkoutJson.orderToken)}`,
+            ),
+          );
+          assert.equal(queryTokenRejected.status, 401);
 
           // Pre-payment poll with orderToken -> paid: false, MUST NOT leak accessToken
           const prePollRes = await orderGET(
@@ -762,6 +778,8 @@ async function main(): Promise<void> {
             makeJsonRequest('http://localhost/api/billing/checkout', {
               scope: 'heming',
               pairKey: expectedPairKey,
+              amountMinor: 69000,
+              currency: 'RUB',
             }),
           );
           assert.equal(hemCheckoutRes.status, 201);
@@ -998,8 +1016,10 @@ async function main(): Promise<void> {
 
         // ── 6) Security hardening, year-agnostic purchase, tz=Not/AZone, 413, amount<=0 ─
         {
-          // 6a) Checkout rejects zero / negative amounts (P3)
+          // 6a) Checkout requires a positive amount and rejects omitted / null / zero / negative amounts (P3)
           for (const badAmountBody of [
+            { scope: 'interpret', chartKey: expectedChartKey },
+            { scope: 'interpret', chartKey: expectedChartKey, amountMinor: null },
             { scope: 'interpret', chartKey: expectedChartKey, amountMinor: 0 },
             { scope: 'interpret', chartKey: expectedChartKey, amount: 0 },
             { scope: 'interpret', chartKey: expectedChartKey, amount: 0.001 },
@@ -1125,6 +1145,41 @@ async function main(): Promise<void> {
               },
             ],
             [
+              'empty form.timeZone',
+              'http://localhost/api/chart',
+              {
+                form: {
+                  year: '1990',
+                  month: '5',
+                  day: '15',
+                  clockHour: '8',
+                  clockMinute: '0',
+                  gender: 'male',
+                  timeZone: '',
+                },
+              },
+            ],
+            [
+              'whitespace form.timeZone',
+              'http://localhost/api/chart',
+              {
+                form: {
+                  year: '1990',
+                  month: '5',
+                  day: '15',
+                  clockHour: '8',
+                  clockMinute: '0',
+                  gender: 'male',
+                  timeZone: '   ',
+                },
+              },
+            ],
+            [
+              'empty birthInfo.timeZone',
+              'http://localhost/api/chart',
+              { birthInfo: { ...validBirth, timeZone: '' } },
+            ],
+            [
               'form.tz with valid city',
               'http://localhost/api/chart',
               {
@@ -1145,7 +1200,7 @@ async function main(): Promise<void> {
             assert.equal(badTzRes.status, 400, `Expected 400 for invalid zone case: ${label}`);
           }
 
-          // Valid query ?tz=Europe/Moscow accepted
+          // Valid query ?tz=Europe/Moscow accepted & manual utcOffsetMinutes with city works without empty timeZone
           const validTzRes = await chartPOST(
             makeJsonRequest('http://localhost/api/chart?tz=Europe/Moscow', {
               birthInfo: validBirth,
@@ -1154,19 +1209,103 @@ async function main(): Promise<void> {
           );
           assert.equal(validTzRes.status, 200);
 
-          // Invalid timeZone rejected in /api/interpret and /api/heming too
+          const manualOffsetWithCityRes = await chartPOST(
+            makeJsonRequest('http://localhost/api/chart', {
+              form: {
+                year: '1990',
+                month: '5',
+                day: '15',
+                clockHour: '8',
+                clockMinute: '0',
+                gender: 'male',
+                city: 'Москва',
+                utcOffsetMinutes: 300,
+              },
+            }),
+          );
+          assert.equal(manualOffsetWithCityRes.status, 200);
+          const manualOffsetJson = (await manualOffsetWithCityRes.json()) as { chart: ZiweiChart };
+          assert.equal(manualOffsetJson.chart.birthInfo.utcOffsetMinutes, 300);
+          assert.equal(manualOffsetJson.chart.birthInfo.timeZone, undefined);
+
+          // Invalid timeZone / query ?tz= / ?timeZone= rejected in /api/interpret and /api/heming too
           const badChartForAi: ZiweiChart = {
             ...chartA,
             birthInfo: { ...chartA.birthInfo, timeZone: 'Not/AZone' },
           };
-          const badIntTzRes = await interpretPOST(
-            makeJsonRequest(
+          for (const [label, url, payload] of [
+            [
+              'interpret bad birthInfo.timeZone',
               'http://localhost/api/interpret',
               { chart: badChartForAi, messages: [{ role: 'user', content: 'test' }] },
+            ],
+            [
+              'interpret query ?tz=Not/AZone',
+              'http://localhost/api/interpret?tz=Not/AZone',
+              { chart: chartB, messages: [{ role: 'user', content: 'test' }] },
+            ],
+            [
+              'interpret query ?timeZone=Not/AZone',
+              'http://localhost/api/interpret?timeZone=Not/AZone',
+              { chart: chartB, messages: [{ role: 'user', content: 'test' }] },
+            ],
+            [
+              'interpret body tz',
+              'http://localhost/api/interpret',
+              { chart: chartB, messages: [{ role: 'user', content: 'test' }], tz: 'Not/AZone' },
+            ],
+          ] as const) {
+            const badIntTzRes = await interpretPOST(
+              makeJsonRequest(url, payload, { Authorization: `Bearer ${bOrder.accessToken}` }),
+            );
+            assert.equal(badIntTzRes.status, 400, `Expected 400 for ${label}`);
+          }
+
+          for (const [label, url, payload] of [
+            [
+              'heming query ?tz=Not/AZone previewOnly',
+              'http://localhost/api/heming?tz=Not/AZone',
+              { chartA, chartB, previewOnly: true, lang: 'ru' },
+            ],
+            [
+              'heming query ?timeZone=Not/AZone paid',
+              'http://localhost/api/heming?timeZone=Not/AZone',
+              { chartA, chartB, lang: 'ru' },
+            ],
+            [
+              'heming body timeZone=""',
+              'http://localhost/api/heming',
+              { chartA, chartB, previewOnly: true, timeZone: '' },
+            ],
+            [
+              'heming bad chartB.birthInfo.timeZone',
+              'http://localhost/api/heming',
+              { chartA, chartB: badChartForAi, previewOnly: true },
+            ],
+          ] as const) {
+            const badHemTzRes = await hemingPOST(makeJsonRequest(url, payload));
+            assert.equal(badHemTzRes.status, 400, `Expected 400 for ${label}`);
+          }
+
+          const validIntQueryTz = await interpretPOST(
+            makeJsonRequest(
+              'http://localhost/api/interpret?tz=Europe/Moscow',
+              { chart: chartB, messages: [{ role: 'user', content: 'Разбор' }], lang: 'ru' },
               { Authorization: `Bearer ${bOrder.accessToken}` },
             ),
           );
-          assert.equal(badIntTzRes.status, 400);
+          assert.equal(validIntQueryTz.status, 200);
+          await readSseResponse(validIntQueryTz);
+
+          const validHemQueryTz = await hemingPOST(
+            makeJsonRequest('http://localhost/api/heming?tz=Europe/Moscow', {
+              chartA,
+              chartB,
+              previewOnly: true,
+              lang: 'ru',
+            }),
+          );
+          assert.equal(validHemQueryTz.status, 200);
 
           // 6d) /api/chart enforces request body size limit -> 413 PAYLOAD_TOO_LARGE (P3 #1)
           const hugePad = 'x'.repeat(MAX_CHART_BODY_BYTES + 1024);

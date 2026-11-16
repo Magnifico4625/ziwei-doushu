@@ -39,6 +39,8 @@ export async function OPTIONS(req: Request): Promise<Response> {
   return handleCorsPreflight(req);
 }
 
+const UNAUTHORIZED_MESSAGE = 'Valid order authorization token is required.';
+
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const orderId = url.searchParams.get('orderId')?.trim() ?? '';
@@ -59,22 +61,18 @@ export async function GET(req: Request): Promise<Response> {
       401,
       'unauthorized',
       'UNAUTHORIZED',
-      'Order authorization token is required.',
+      UNAUTHORIZED_MESSAGE,
     );
   }
 
   const order = await getOrder(orderId);
-  if (!order) {
-    return jsonError(req, 404, 'order_not_found', 'NOT_FOUND', 'Order not found.');
-  }
-
-  if (!verifyOrderToken(orderToken, order.claimTokenHash)) {
+  if (!order || !verifyOrderToken(orderToken, order.claimTokenHash)) {
     return jsonError(
       req,
       401,
-      'invalid_order_token',
+      'unauthorized',
       'UNAUTHORIZED',
-      'Invalid order authorization token.',
+      UNAUTHORIZED_MESSAGE,
     );
   }
 
